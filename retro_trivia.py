@@ -541,6 +541,18 @@ class _SocketTransport:
             raise _CarrierLost("socket closed") from exc
 
     def close(self) -> None:
+        # Enter can be the final key before returning to the BBS. Consume its
+        # queued CR-NUL/CR-LF trailer, but leave any next host command untouched.
+        # A bounded wait covers a split TCP read without hanging on a bare CR.
+        if self.after_cr and not self.lost:
+            try:
+                if self.waiting(0.25):
+                    trailer = self.socket.recv(1, socket.MSG_PEEK)
+                    if trailer in (b"\x00", b"\n"):
+                        self.socket.recv(1)
+            except OSError:
+                pass  # The caller may disconnect while returning to the host.
+        self.lost = True
         self.socket.close()
 
 

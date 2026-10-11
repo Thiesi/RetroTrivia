@@ -5,6 +5,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -168,13 +169,36 @@ def socket_door(tmp_path):
         door.close()
 
 
-def test_inherited_socket_plays_a_round_and_returns_to_host(socket_door):
+@pytest.mark.parametrize("ending", [b"\r\x00", b"\r\n"])
+def test_inherited_socket_plays_a_round_and_returns_to_host(socket_door, ending):
     door = socket_door()
-    door.peer.sendall(b"1A\xff\xfbBAAAA\r\x00")
+    door.peer.sendall(b"1A\xff\xfbBAAAA" + ending + b"Next host command")
     door.finish()
     assert b"Final score:" in door.output and b"Starfox" in door.output
+    door.host.settimeout(1)
+    assert door.host.recv(100) == b"Next host command"
     door.host.sendall(b"Back at the BBS")
     assert door.peer.recv(100) == b"Back at the BBS"
+
+
+def test_return_waits_for_a_fragmented_enter_trailer():
+    host, peer = socket.socketpair()
+    transport = rt._SocketTransport(host.dup().detach())
+    try:
+        peer.sendall(b"\r")
+        assert transport(0.1) == b"\r"
+        sender = threading.Timer(0.05, peer.sendall, args=(b"\x00Q",))
+        sender.start()
+        try:
+            transport.close()
+        finally:
+            sender.join()
+        host.settimeout(1)
+        assert host.recv(100) == b"Q"
+    finally:
+        transport.close()
+        host.close()
+        peer.close()
 
 
 @pytest.mark.parametrize("stage", ["title", "question", "splash"])
