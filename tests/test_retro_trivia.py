@@ -391,7 +391,7 @@ def _poll_modes():
             os.set_blocking(reader, False)
             os.set_blocking(reader, True)
             modes.append(False)
-        except OSError:
+        except (AttributeError, OSError):  # no os.set_blocking on Windows before 3.12
             pass
     finally:
         os.close(reader)
