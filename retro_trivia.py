@@ -51,6 +51,7 @@ _OUTPUT_WIDTH = 80
 _OUTPUT_ENCODING = "utf-8"
 _SOCKET_TRANSPORT: _SocketTransport | None = None
 _CONSOLE_INPUT = None
+_TERMINAL_FD = None
 # Screen artwork uses printable CP437 bytes, never its low control-byte glyphs.
 _CP437_TRANSLATION = str.maketrans({
     "╭": "┌", "╮": "┐", "╯": "┘", "╰": "└",
@@ -564,6 +565,10 @@ class _SocketTransport:
 
 def _console_key() -> str | None:
     """Read one Windows console key without echo; ignore extended key codes."""
+    # A blocking getwch() does not yield to Python's SIGINT handler. Poll first
+    # so Ctrl-C can exit even when no subsequent key is pressed.
+    while not _CONSOLE_INPUT.kbhit():
+        time.sleep(0.01)
     key = _CONSOLE_INPUT.getwch()
     if key in ("\x00", "\xe0"):
         _CONSOLE_INPUT.getwch()
@@ -576,7 +581,7 @@ def _console_key() -> str | None:
 @contextmanager
 def _standalone_terminal(drop_file: str | None):
     """Own terminal input only for an interactive launch without a BBS host."""
-    global _CONSOLE_INPUT
+    global _CONSOLE_INPUT, _TERMINAL_FD
     if drop_file is not None or os.environ.get("NETBBS_DOOR_INFO") or not sys.stdin.isatty():
         yield
         return
@@ -595,10 +600,13 @@ def _standalone_terminal(drop_file: str | None):
 
         fd = sys.stdin.fileno()
         previous = termios.tcgetattr(fd)
+        previous_fd = _TERMINAL_FD
         try:
             tty.setcbreak(fd)
+            _TERMINAL_FD = fd
             yield
         finally:
+            _TERMINAL_FD = previous_fd
             termios.tcsetattr(fd, termios.TCSADRAIN, previous)
 
 
@@ -622,6 +630,20 @@ def read_key() -> str:
                 break
         if not data:
             raise _CarrierLost("socket closed")
+    elif _TERMINAL_FD is not None:
+        # Use unbuffered reads so select also sees bytes following an Escape.
+        data = os.read(_TERMINAL_FD, 1)
+        if data == b"\x1b":
+            # Cursor/function keys are CSI or SS3 sequences. Consume the whole
+            # key so their A-D suffix cannot accidentally answer a question.
+            if select.select([_TERMINAL_FD], [], [], 0.05)[0]:
+                prefix = os.read(_TERMINAL_FD, 1)
+                if prefix in (b"[", b"O"):
+                    while select.select([_TERMINAL_FD], [], [], 0.05)[0]:
+                        tail = os.read(_TERMINAL_FD, 1)
+                        if not tail or b"@" <= tail <= b"~":
+                            break
+            return "\x1b"
     else:
         data = sys.stdin.buffer.read(1)
     if not data:
@@ -1914,6 +1936,7 @@ def main(drop_file: str | None = None, *, encoding: str = "auto") -> int:
     except _CarrierLost:
         return 0
     except KeyboardInterrupt:
+        out_line()
         return 130
     finally:
         if _SOCKET_TRANSPORT is not None:

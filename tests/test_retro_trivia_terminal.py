@@ -95,6 +95,43 @@ def test_windows_ctrl_c_restores_the_input_reader(monkeypatch):
     assert rt._CONSOLE_INPUT is None
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires a real Windows console")
+def test_real_windows_console_ctrl_c_exits_without_an_extra_key(tmp_path):
+    report = tmp_path / "console-result.json"
+    script = r'''
+import ctypes, json, pathlib, runpy, sys, threading
+assert sys.stdin.isatty(), "test requires console input"
+# The test runner may inherit an ignore-Ctrl-C flag from its launcher.
+# A regular interactive console has Ctrl-C delivery enabled.
+assert ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False)
+main = runpy.run_path(sys.argv[1])["main"]
+def interrupt():
+    ctypes.windll.kernel32.GenerateConsoleCtrlEvent(0, 0)
+timer = threading.Timer(0.5, interrupt)
+timer.start()
+result = main()
+timer.join()
+pathlib.Path(sys.argv[2]).write_text(json.dumps({
+    "status": result, "restored": main.__globals__["_CONSOLE_INPUT"] is None,
+}))
+'''
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 0  # Exercise a real console without opening a visible window.
+    env = dict(os.environ, DOOR_SPLASH="0")
+    env.pop("NETBBS_DOOR_INFO", None)
+    proc = subprocess.Popen([sys.executable, "-c", script, str(_PATH), str(report)],
+                            creationflags=subprocess.CREATE_NEW_CONSOLE,
+                            startupinfo=startup, env=env)
+    try:
+        assert proc.wait(timeout=10) == 0
+        assert json.loads(report.read_text()) == {"status": 130, "restored": True}
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=5)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="requires a real POSIX PTY")
 @pytest.mark.parametrize("exit_key,returncode", [(b"Q", 0), (b"\x03", 130)])
 def test_real_tty_single_keys_size_and_restoration(exit_key, returncode):
@@ -137,8 +174,9 @@ def test_real_tty_single_keys_size_and_restoration(exit_key, returncode):
         if exit_key == b"Q":
             os.write(master, b"1")  # No Enter: this must immediately start a question.
             read_until(b"Your answer")
-            os.write(master, b"Q")
-            read_until(b"Press any key to leave")
+            os.write(master, b"\x1b[A\x1b[B\x1b[C\x1b[D\x1bOA\x1b[1;5DQ")
+            screen = read_until(b"Press any key to leave")
+            assert "Correct!" not in screen and "Not quite." not in screen
             os.write(master, b"X")
         else:
             os.write(master, exit_key)
@@ -146,6 +184,11 @@ def test_real_tty_single_keys_size_and_restoration(exit_key, returncode):
         assert proc.returncode == returncode, stderr
         assert not stderr
         assert termios.tcgetattr(slave) == original
+        if exit_key == b"\x03":
+            while select.select([master], [], [], 0)[0]:
+                output.extend(os.read(master, 65536))
+            plain = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output)
+            assert plain.endswith(b"\r\n")
     finally:
         if proc.poll() is None:
             proc.kill()
