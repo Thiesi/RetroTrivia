@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Retro Trivia -- a real, playable door game for NetBBS (issue #172).
+Retro Trivia -- a single-player BBS trivia door, originally for NetBBS.
 
 A genuine proof-of-concept for the native door-game vertical, not a
 throwaway test fixture: reads the v1 drop-file (see `netbbs.doors.
@@ -17,13 +17,14 @@ field falls back to a sane default if `NETBBS_DOOR_INFO` is unset or
 unreadable, so a SysOp (or anyone) can try it before ever registering
 it as a door.
 
-Zero external dependencies -- stdlib only, so "python3" plus this
-file's path is the entire executable_path/args a SysOp needs to
-register (see examples/README.md for the exact registration steps).
+Classic hosts can pass a DOOR32.SYS or DOOR.SYS filename on the command
+line; NETBBS_DOOR_INFO takes precedence. Stdio I/O and UTF-8 output are
+required. Zero external dependencies -- see README.md for SysOp setup.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import random
@@ -33,6 +34,7 @@ import sys
 import time
 import unicodedata
 import zlib
+from pathlib import Path
 
 ESC = "\x1b"
 RESET = f"{ESC}[0m"
@@ -99,37 +101,141 @@ def _wrap(text: str, width: int) -> list[str]:
     return lines or [""]
 
 
-def _load_door_info() -> dict:
+def _drop_file_text(value: str) -> str:
+    """Remove terminal commands and control characters from foreign names."""
+    value = re.sub(
+        r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c|$)"
+        r"|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c|$)"
+        r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"
+        r"|\x1b[ -/]*[@-~]",
+        "", value,
+    )
+    return "".join(ch for ch in value if not unicodedata.category(ch).startswith("C")).strip()
+
+
+def _classic_door_info(path: Path) -> dict:
+    """Read DOOR32 or DOOR.SYS atomically; adapted from Voidrunner's reader."""
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp437")
+    # Only CR/LF delimit records: other controls belong to the name sanitizer.
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    lines = [line.strip() for line in lines]
+
+    def number(line: int, minimum: int = 0) -> int:
+        value = lines[line - 1]
+        if not value.isascii() or not value.isdecimal() or len(value) > 10:
+            raise ValueError(f"invalid number on line {line}")
+        result = int(value)
+        if result < minimum:
+            raise ValueError(f"invalid number on line {line}")
+        return result
+
+    def name(line: int, fallback: str) -> str:
+        return _drop_file_text(lines[line - 1]) or fallback
+
+    kind = path.name.upper()
+    if kind not in ("DOOR32.SYS", "DOOR.SYS"):
+        if lines and re.fullmatch(r"COM\d+:", lines[0], re.IGNORECASE):
+            kind = "DOOR.SYS"
+        elif len(lines) == 11 and lines[0] in ("0", "1", "2"):
+            kind = "DOOR32.SYS"
+        else:
+            raise ValueError("unrecognized drop-file format")
+    if kind == "DOOR32.SYS":
+        if len(lines) < 11:
+            raise ValueError("DOOR32.SYS needs 11 lines")
+        comm_type = number(1)
+        emulation = number(10)
+        if comm_type not in (0, 1, 2) or emulation not in (0, 1, 2, 3, 4):
+            raise ValueError("invalid DOOR32 communications type or emulation")
+        number(3)  # baud rate (zero is valid locally)
+        number(8)  # security level
+        number(11, 1)  # node number
+        info = {
+            "drop_file_type": kind, "user_id": number(5, 1),
+            "handle": name(7, name(6, "Guest")),
+            "node_name": name(4, "Local"),
+            "terminal_height": 24, "emulation": emulation,
+            "minutes_left": number(9), "comm_type": comm_type,
+            "comm_handle": number(2),
+        }
+    else:
+        if len(lines) < 31:
+            raise ValueError("DOOR.SYS needs at least 31 lines")
+        if not re.fullmatch(r"COM\d+:", lines[0], re.IGNORECASE):
+            raise ValueError("invalid DOOR.SYS communications port")
+        emulation = lines[19].upper()
+        if emulation not in ("GR", "NG", "7E"):
+            raise ValueError("invalid DOOR.SYS graphics mode")
+        info = {
+            "drop_file_type": kind, "user_id": number(26, 1),
+            "handle": name(36, name(10, "Guest")) if len(lines) >= 36 else name(10, "Guest"),
+            "node_name": "Local", "terminal_height": number(21, 1),
+            "emulation": emulation, "minutes_left": number(19),
+            "comm_port": lines[0],
+        }
+    info.update(terminal_width=80, color_depth="16")
+    return info
+
+
+def _load_door_info(drop_file: str | None = None) -> dict:
+    path = os.environ.get("NETBBS_DOOR_INFO")
     default = {
         "handle": "Guest",
         "user_id": 0,
         "terminal_width": 80,
         "terminal_height": 24,
         "color_depth": "256",
-        "node_name": "NetBBS",
+        "node_name": "NetBBS" if path else "Local",
     }
-    path = os.environ.get("NETBBS_DOOR_INFO")
-    if not path:
-        return default
-    try:
-        with open(path, encoding="utf-8") as f:
-            info = json.load(f)
-    except (OSError, ValueError):
-        return default
-    default.update(info)
+    if path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                info = json.load(f)
+            if isinstance(info, dict):
+                default.update(info)
+        except (OSError, ValueError):
+            pass
+    elif drop_file is not None:
+        default["color_depth"] = "16"
+        try:
+            default.update(_classic_door_info(Path(drop_file)))
+        except (OSError, ValueError) as exc:
+            # Never echo file contents or paths: DOOR.SYS can contain a password.
+            reason = "cannot read file" if isinstance(exc, OSError) else str(exc)
+            print(f"Retro Trivia: drop file ignored ({reason}); using Guest defaults.", file=sys.stderr)
     return default
 
 
 class Palette:
-    """Two depths of the same handful of named colors -- truecolor RGB
-    triples, and their nearest hand-picked xterm 256 equivalents. A real
-    nearest-256 algorithm is overkill for the colors this door
-    actually uses."""
+    """Named colors in truecolor, xterm 256, or classic ANSI 16 colors."""
 
-    def __init__(self, truecolor: bool):
+    def __init__(self, truecolor: bool, *, basic: bool = False):
         self._truecolor = truecolor
+        self._basic = basic
+
+    @staticmethod
+    def _ansi16(rgb: tuple[int, int, int], *, background: bool = False) -> str:
+        colors = (
+            (0, 0, 0), (170, 0, 0), (0, 170, 0), (170, 85, 0),
+            (0, 0, 170), (170, 0, 170), (0, 170, 170), (170, 170, 170),
+            (85, 85, 85), (255, 85, 85), (85, 255, 85), (255, 255, 85),
+            (85, 85, 255), (255, 85, 255), (85, 255, 255), (255, 255, 255),
+        )
+        index = min(range(8 if background else 16),
+                    key=lambda i: sum((a - b) ** 2 for a, b in zip(rgb, colors[i])))
+        if background:
+            return str(40 + index)
+        return f"{'1;' if index >= 8 else ''}{30 + index % 8}"
 
     def _sgr(self, rgb: tuple[int, int, int], idx256: int) -> str:
+        if self._basic:
+            return f"{ESC}[{self._ansi16(rgb)}m"
         if self._truecolor:
             r, g, b = rgb
             return f"{ESC}[38;2;{r};{g};{b}m"
@@ -874,7 +980,7 @@ class _Splash:
         self.right = usable if usable % 2 else usable - 1
         self.bottom = height
         self.canvas = _Canvas(usable, height)
-        self.node = _splash_plain(info.get("node_name", "NetBBS")) or "NetBBS"
+        self.node = _splash_plain(info.get("node_name", "Local")) or "Local"
         self.handle = _splash_plain(info.get("handle", "Guest")) or "Guest"
         self.cells: dict[tuple[int, int], tuple[str, str]] = {}
         self.letters: list[list[tuple[int, int, str, str]]] = []
@@ -893,7 +999,11 @@ class _Splash:
     def style(self, fg, bg=None, *, bold: bool = False) -> str:
         """One escape that resets and sets everything a cell needs."""
         params = ["0"] + (["1"] if bold else [])
-        if self.p._truecolor:
+        if self.p._basic:
+            params.append(self.p._ansi16(fg[0]))
+            if bg is not None:
+                params.append(self.p._ansi16(bg[0], background=True))
+        elif self.p._truecolor:
             params.append("38;2;{};{};{}".format(*fg[0]))
             if bg is not None:
                 params.append("48;2;{};{};{}".format(*bg[0]))
@@ -1317,12 +1427,12 @@ def draw_title(p: Palette, info: dict, width: int = 78) -> None:
     out_line(_center_line(f"{p.border}{BOLD}║{RESET}", t2, f"{p.border}{BOLD}║{RESET}", w))
     out_line(f"{p.border}{BOLD}╚{'═' * (w - 2)}╝{RESET}")
     out_line()
-    b1 = f"{p.dark_border}⟦{RESET} {p.muted}NODE:{RESET} {p.accent}{BOLD}{info.get('node_name', 'NetBBS')}{RESET} {p.dark_border}⟧{RESET}"
+    b1 = f"{p.dark_border}⟦{RESET} {p.muted}NODE:{RESET} {p.accent}{BOLD}{info.get('node_name', 'Local')}{RESET} {p.dark_border}⟧{RESET}"
     b2 = f"{p.dark_border}⟦{RESET} {p.muted}CALLER:{RESET} {p.gold}{BOLD}{info.get('handle', 'Guest')}{RESET} {p.dark_border}⟧{RESET}"
     b3 = f"{p.dark_border}⟦{RESET} {p.muted}ROUND:{RESET} {p.accent}{BOLD}YOU CHOOSE{RESET} {p.dark_border}⟧{RESET}"
     out_line(f"  {b1}   {b2}   {b3}")
     out_line()
-    out_line(f"{p.muted}Welcome, {RESET}{p.accent}{BOLD}{info.get('handle', 'Guest')}{RESET}{p.muted}, to {info.get('node_name', 'NetBBS')}'s trivia challenge.{RESET}")
+    out_line(f"{p.muted}Welcome, {RESET}{p.accent}{BOLD}{info.get('handle', 'Guest')}{RESET}{p.muted}, to {info.get('node_name', 'Local')}'s trivia challenge.{RESET}")
     out_line(f"{p.dark_border}╭{'─' * (w - 2)}╮{RESET}")
     how = (f"  {p.gold}{BOLD}HOW TO PLAY:{RESET} {p.white}Press {p.gold}{BOLD}A{RESET}{p.white}/"
            f"{p.gold}{BOLD}B{RESET}{p.white}/{p.gold}{BOLD}C{RESET}{p.white}/{p.gold}{BOLD}D{RESET}"
@@ -1534,19 +1644,20 @@ def draw_final_score(p: Palette, score: int, total: int, info: dict | None = Non
     out_line(_box_line(f"{p.border}{BOLD}║{RESET}", "", f"{p.border}{BOLD}║{RESET}", w))
     out_line(f"{p.border}{BOLD}╠{'─' * (w - 2)}╣{RESET}")
 
-    caller_str = f"  {p.muted}Player: {p.accent}{info.get('handle', 'Guest')}{p.muted}  •  Node: {p.accent}{info.get('node_name', 'NetBBS')}{p.muted}  •  Format: {p.accent}{total}-Question Round{RESET}"
+    caller_str = f"  {p.muted}Player: {p.accent}{info.get('handle', 'Guest')}{p.muted}  •  Node: {p.accent}{info.get('node_name', 'Local')}{p.muted}  •  Format: {p.accent}{total}-Question Round{RESET}"
     out_line(_box_line(f"{p.border}{BOLD}║{RESET}", caller_str, f"{p.border}{BOLD}║{RESET}", w))
     out_line(f"{p.border}{BOLD}╚{'═' * (w - 2)}╝{RESET}")
     out_line()
     out_line(f"{p.muted}Thanks for playing. Press any key to leave...{RESET}")
 
 
-def main() -> int:
+def main(drop_file: str | None = None) -> int:
     global _OUTPUT_WIDTH
 
     sys.stdout.reconfigure(encoding="utf-8")
-    info = _load_door_info()
-    palette = Palette(truecolor=info.get("color_depth") == "truecolor")
+    info = _load_door_info(drop_file)
+    palette = Palette(truecolor=info.get("color_depth") == "truecolor",
+                      basic=info.get("color_depth") == "16")
 
     try:
         _OUTPUT_WIDTH = max(1, int(info.get("terminal_width", 80)))
@@ -1603,4 +1714,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description="Retro Trivia BBS door (stdio, UTF-8 output)")
+    parser.add_argument("drop_file", nargs="?", help="DOOR32.SYS or DOOR.SYS path")
+    sys.exit(main(parser.parse_args().drop_file))
