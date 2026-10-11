@@ -15,9 +15,9 @@ least 40×12.
 - **NetBBS:** bundled. NetBBS ships a tagged release of this file
   (Thiesi/NetBBS#1226), so a NetBBS SysOp has nothing to install.
 - **Other BBS software** (Synchronet, Mystic, ENiGMA½, …): reads DOOR32.SYS
-  and DOOR.SYS caller metadata for stdio launches. Output currently requires
-  a UTF-8, ANSI-capable terminal/bridge. CP437 output (#3), DOOR32 socket
-  transport (#4) and real-host validation (#5) are still pending.
+  and DOOR.SYS caller metadata for stdio launches, with CP437 or UTF-8 output
+  and an ANSI-capable terminal/bridge. DOOR32 socket transport (#4) and
+  real-host validation (#5) are still pending.
 - **Standalone**, for trying it out: `python3 retro_trivia.py`.
 
 ## SysOp setup
@@ -42,16 +42,22 @@ NetBBS keeps its existing host defaults and colour selection. An unreadable
 or malformed classic file emits a warning to stderr and starts with Guest,
 Local, 80×24 and 16-colour defaults. No session data is saved.
 
+Foreign drop files default to **CP437 output**. Use `--encoding utf-8` for a
+UTF-8 terminal/bridge, or `--encoding cp437` to force CP437 when trying the
+game standalone. `--encoding auto` is the default: CP437 with a classic drop
+file, UTF-8 otherwise. NetBBS always receives UTF-8, even with an override,
+because NetBBS handles its caller's encoding itself.
+
 The following recipes use **standard input/output**. The host must forward
-single keys and accept UTF-8 output; decoding CP437 metadata does not yet
-enable CP437 screen output. Reading DOOR32 metadata does not yet use the
-socket named in that file. These recipes await the field tests in #5.
+single keys and match the game's output encoding. Reading DOOR32 metadata
+does not yet use the socket named in that file. These recipes await the
+field tests in #5.
 
 | Host | Stdio launch configuration |
 | --- | --- |
-| Synchronet on Linux | In SCFG → Online Programs, enable Native Executable/Script, select Standard I/O, choose DOOR.SYS and put drop files in the Node Directory. Command line: `/usr/bin/python3 /opt/doors/retrotrivia/retro_trivia.py "%f"`. Use a UTF-8 caller/stdio configuration. |
-| Mystic on Linux/macOS | Use the `DD` external-program menu action with `/usr/bin/python3 /opt/doors/retrotrivia/retro_trivia.py "%PDOOR.SYS"`. `%P` includes the trailing slash. Use a UTF-8 caller configuration. |
-| ENiGMA½ | Add an `abracadabra` menu entry as below; `encoding: utf8` tells the bridge how to decode the game's output. |
+| Synchronet on Linux | In SCFG → Online Programs, enable Native Executable/Script, select Standard I/O, choose DOOR.SYS and put drop files in the Node Directory. Command line: `/usr/bin/python3 /opt/doors/retrotrivia/retro_trivia.py "%f"`. This uses CP437; add `--encoding utf-8` for a UTF-8 stdio configuration. |
+| Mystic on Linux/macOS | Use the `DD` external-program menu action with `/usr/bin/python3 /opt/doors/retrotrivia/retro_trivia.py "%PDOOR.SYS"`. `%P` includes the trailing slash. This uses CP437; add `--encoding utf-8` for UTF-8 callers. |
+| ENiGMA½ | Add an `abracadabra` menu entry as below; `encoding: cp437` matches the game's default. For UTF-8, set it to `utf8` and add `"--encoding", "utf-8"` to `args`. |
 
 ```hjson
 doorRetroTrivia: {
@@ -63,7 +69,7 @@ doorRetroTrivia: {
         cmd: /usr/bin/python3
         args: [ "/opt/doors/retrotrivia/retro_trivia.py", "{dropFilePath}" ]
         io: stdio
-        encoding: utf8
+        encoding: cp437
     }
 }
 ```
@@ -91,6 +97,9 @@ Pushing a tag such as `v1.0.0` runs the suite and publishes that commit's
 NetBBS vendors these releases.
 
 The banner is drawn from the game's own launch splash by `art/render_banner.py`.
+The CP437 screen preview can be regenerated with
+`python art/render_terminal_preview.py` (development-only dependencies: Pillow
+and pyte; `--font` accepts a monospace TrueType font).
 
 ## License
 
