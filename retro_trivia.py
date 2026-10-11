@@ -27,11 +27,13 @@ Zero external dependencies -- see README.md for SysOp setup.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import random
 import re
 import select
+import shutil
 import socket
 import sys
 import time
@@ -48,6 +50,8 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\([AB0-2]|\x1b[78HDM]")
 _OUTPUT_WIDTH = 80
 _OUTPUT_ENCODING = "utf-8"
 _SOCKET_TRANSPORT: _SocketTransport | None = None
+_CONSOLE_INPUT = None
+_TERMINAL_FD = None
 # Screen artwork uses printable CP437 bytes, never its low control-byte glyphs.
 _CP437_TRANSLATION = str.maketrans({
     "╭": "┌", "╮": "┐", "╯": "┘", "╰": "└",
@@ -221,6 +225,9 @@ def _load_door_info(drop_file: str | None = None) -> dict:
             # Never echo file contents or paths: DOOR.SYS can contain a password.
             reason = "cannot read file" if isinstance(exc, OSError) else str(exc)
             print(f"Retro Trivia: drop file ignored ({reason}); using Guest defaults.", file=sys.stderr)
+    else:
+        size = shutil.get_terminal_size(fallback=(80, 24))
+        default.update(terminal_width=size.columns, terminal_height=size.lines)
     return default
 
 
@@ -556,6 +563,53 @@ class _SocketTransport:
         self.socket.close()
 
 
+def _console_key() -> str | None:
+    """Read one Windows console key without echo; ignore extended key codes."""
+    # A blocking getwch() does not yield to Python's SIGINT handler. Poll first
+    # so Ctrl-C can exit even when no subsequent key is pressed.
+    while not _CONSOLE_INPUT.kbhit():
+        time.sleep(0.01)
+    key = _CONSOLE_INPUT.getwch()
+    if key in ("\x00", "\xe0"):
+        _CONSOLE_INPUT.getwch()
+        return None
+    if key == "\x03":
+        raise KeyboardInterrupt
+    return key
+
+
+@contextmanager
+def _standalone_terminal(drop_file: str | None):
+    """Own terminal input only for an interactive launch without a BBS host."""
+    global _CONSOLE_INPUT, _TERMINAL_FD
+    if drop_file is not None or os.environ.get("NETBBS_DOOR_INFO") or not sys.stdin.isatty():
+        yield
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        previous = _CONSOLE_INPUT
+        _CONSOLE_INPUT = msvcrt
+        try:
+            yield
+        finally:
+            _CONSOLE_INPUT = previous
+    else:
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        previous = termios.tcgetattr(fd)
+        previous_fd = _TERMINAL_FD
+        try:
+            tty.setcbreak(fd)
+            _TERMINAL_FD = fd
+            yield
+        finally:
+            _TERMINAL_FD = previous_fd
+            termios.tcsetattr(fd, termios.TCSADRAIN, previous)
+
+
 def read_key() -> str:
     """One raw byte -- see this module's own docstring for why that's
     all a door gets. A caller disconnecting mid-question doesn't reach
@@ -564,6 +618,11 @@ def read_key() -> str:
     anyway for the rarer case of stdin closing gracefully first."""
     if _PUSHBACK:
         return _PUSHBACK.pop(0)
+    if _CONSOLE_INPUT is not None:
+        while True:
+            key = _console_key()
+            if key is not None:
+                return key
     if _SOCKET_TRANSPORT is not None:
         while True:
             data = _SOCKET_TRANSPORT(None)
@@ -571,6 +630,20 @@ def read_key() -> str:
                 break
         if not data:
             raise _CarrierLost("socket closed")
+    elif _TERMINAL_FD is not None:
+        # Use unbuffered reads so select also sees bytes following an Escape.
+        data = os.read(_TERMINAL_FD, 1)
+        if data == b"\x1b":
+            # Cursor/function keys are CSI or SS3 sequences. Consume the whole
+            # key so their A-D suffix cannot accidentally answer a question.
+            if select.select([_TERMINAL_FD], [], [], 0.05)[0]:
+                prefix = os.read(_TERMINAL_FD, 1)
+                if prefix in (b"[", b"O"):
+                    while select.select([_TERMINAL_FD], [], [], 0.05)[0]:
+                        tail = os.read(_TERMINAL_FD, 1)
+                        if not tail or b"@" <= tail <= b"~":
+                            break
+            return "\x1b"
     else:
         data = sys.stdin.buffer.read(1)
     if not data:
@@ -973,12 +1046,33 @@ class _SocketPoll(_KeyPoll):
         return self.transport(0)
 
 
-def _open_key_poll() -> _KeyPoll | None:
+class _ConsolePoll:
+    """Windows console input bypasses the CRT's line buffering and echo."""
+
+    def waiting(self, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while not _CONSOLE_INPUT.kbhit():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.01, remaining))
+        return True
+
+    def take(self, timeout: float) -> bool:
+        if not self.waiting(timeout):
+            return False
+        _console_key()  # Consume the whole key, including an extended key's tail.
+        return True
+
+
+def _open_key_poll() -> _KeyPoll | _ConsolePoll | None:
     """A poll of the caller's stdin, or `None` when there is no live stream to
     poll -- a test harness's stand-in stdin, a closed one -- in which case the
     splash is skipped entirely: an effect nobody can skip is only a delay."""
     if _SOCKET_TRANSPORT is not None:
         return _SocketPoll(_SOCKET_TRANSPORT)
+    if _CONSOLE_INPUT is not None:
+        return _ConsolePoll()
     try:
         fd = sys.stdin.fileno()
     except (AttributeError, OSError, ValueError):
@@ -1546,7 +1640,8 @@ def splash_switched_off() -> bool:
     return os.environ.get("DOOR_SPLASH", "").strip().lower() in ("0", "off", "no", "false")
 
 
-def play_splash(p: Palette, info: dict, width: int, height: int, poll: _KeyPoll | None = None) -> bool:
+def play_splash(p: Palette, info: dict, width: int, height: int,
+                poll: _KeyPoll | _ConsolePoll | None = None) -> bool:
     """Show the splash. Returns True if it ran (to the end or until a key),
     False if it was not shown: no live input to skip it with, typing-ahead
     already waiting, or a terminal too small for it."""
@@ -1836,9 +1931,13 @@ def main(drop_file: str | None = None, *, encoding: str = "auto") -> int:
     else:
         sys.stdout.reconfigure(encoding=_OUTPUT_ENCODING, errors="strict")
     try:
-        return _play_round(info)
+        with _standalone_terminal(drop_file):
+            return _play_round(info)
     except _CarrierLost:
         return 0
+    except KeyboardInterrupt:
+        out_line()
+        return 130
     finally:
         if _SOCKET_TRANSPORT is not None:
             _SOCKET_TRANSPORT.close()

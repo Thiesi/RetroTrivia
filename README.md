@@ -18,7 +18,10 @@ least 40×12.
   and DOOR.SYS caller metadata, with CP437 or UTF-8 output and stdio or
   inherited DOOR32 sockets. An ANSI-capable terminal/bridge is required.
   Real-host validation (#5) is still pending.
-- **Standalone**, for trying it out: `python3 retro_trivia.py`.
+- **Standalone**, for trying it out: `python3 retro_trivia.py`. Interactive
+  terminals use single keys without Enter or echo and detect the terminal's
+  dimensions. Terminal settings are restored when the game exits, including
+  on Ctrl-C. BBS launches use the host's input mode and reported dimensions.
 
 ## SysOp setup
 

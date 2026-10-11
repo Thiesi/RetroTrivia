@@ -79,7 +79,8 @@ def test_alias_encoding_and_empty_alias_fallback(tmp_path, encoding, kind, line)
 ])
 def test_malformed_file_uses_complete_defaults_and_warns(tmp_path, capsys, kind, count, changes):
     info = rt._load_door_info(drop_file(tmp_path, kind, count=count, changes=changes))
-    assert info == dict(rt._load_door_info(), color_depth="16")
+    assert info == {"handle": "Guest", "user_id": 0, "node_name": "Local",
+                    "terminal_width": 80, "terminal_height": 24, "color_depth": "16"}
     warning = capsys.readouterr().err
     assert "drop file ignored" in warning and "Guest defaults" in warning
     assert "UNUSED_TEST_PASSWORD" not in warning
@@ -89,7 +90,10 @@ def test_missing_or_unknown_file_warns(tmp_path, capsys):
     for path in (tmp_path / "absent", tmp_path / "random.txt"):
         if path.name == "random.txt":
             path.write_text("not a drop file", encoding="utf-8")
-        assert rt._load_door_info(str(path)) == dict(rt._load_door_info(), color_depth="16")
+        assert rt._load_door_info(str(path)) == {
+            "handle": "Guest", "user_id": 0, "node_name": "Local",
+            "terminal_width": 80, "terminal_height": 24, "color_depth": "16",
+        }
         assert "drop file ignored" in capsys.readouterr().err
 
 
