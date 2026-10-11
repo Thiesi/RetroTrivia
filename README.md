@@ -15,9 +15,9 @@ least 40×12.
 - **NetBBS:** bundled. NetBBS ships a tagged release of this file
   (Thiesi/NetBBS#1226), so a NetBBS SysOp has nothing to install.
 - **Other BBS software** (Synchronet, Mystic, ENiGMA½, …): reads DOOR32.SYS
-  and DOOR.SYS caller metadata for stdio launches, with CP437 or UTF-8 output
-  and an ANSI-capable terminal/bridge. DOOR32 socket transport (#4) and
-  real-host validation (#5) are still pending.
+  and DOOR.SYS caller metadata, with CP437 or UTF-8 output and stdio or
+  inherited DOOR32 sockets. An ANSI-capable terminal/bridge is required.
+  Real-host validation (#5) is still pending.
 - **Standalone**, for trying it out: `python3 retro_trivia.py`.
 
 ## SysOp setup
@@ -49,9 +49,9 @@ file, UTF-8 otherwise. NetBBS always receives UTF-8, even with an override,
 because NetBBS handles its caller's encoding itself.
 
 The following recipes use **standard input/output**. The host must forward
-single keys and match the game's output encoding. Reading DOOR32 metadata
-does not yet use the socket named in that file. These recipes await the
-field tests in #5.
+single keys and match the game's output encoding. For DOOR32 stdio launches,
+set the communications type to local (`0`); type `2` selects a socket.
+These recipes await the field tests in #5.
 
 | Host | Stdio launch configuration |
 | --- | --- |
@@ -77,6 +77,19 @@ doorRetroTrivia: {
 Host references: [Synchronet door configuration](https://wiki.synchro.net/howto:door:index),
 [Mystic external programs](https://wiki.mysticbbs.com/doku.php?id=menu_commands#external_doors),
 and [ENiGMA½ scripts and native binaries](https://enigma-bbs.github.io/doors/scripts-and-binaries/).
+
+For a native **DOOR32 socket launch** on Windows or POSIX, pass the same
+drop-file path and configure the host to inherit the caller's connected
+socket. DOOR32 line 1 must be `2`; line 2 contains the inherited Winsock
+handle on Windows or descriptor on POSIX. Input and output then use that
+socket, including the splash. The door filters telnet commands, escapes
+outgoing IAC bytes and recognizes CR NUL/CR LF as one Enter key. Carrier loss
+exits cleanly; returning from the door closes its handle without shutting
+down the host's connection. An invalid handle reports an error instead of
+silently starting a stdio game. NetBBS always retains its stdio transport.
+
+An ENiGMA½ `io: socket` callback server is a different launch mechanism;
+use its stdio recipe above. Real Windows Synchronet validation remains #5.
 
 ## Development
 
