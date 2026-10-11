@@ -1,9 +1,9 @@
-"""Retro Trivia's caller-facing contract (issue #514).
+"""Retro Trivia's caller-facing contract (Thiesi/NetBBS#514).
 
 The door is loaded from its file path under a private module name rather than
-through `netbbs.doors.bundled`, for the same reason `tests/vendored_voidrunner.py`
-and `test_doors_runtime.py` do: this is the exact file NetBBS launches as a
-standalone subprocess, not an ordinarily-imported library module.
+imported: `retro_trivia.py` is a standalone script a BBS launches as a
+subprocess, not a library module, so testing it by path exercises precisely the
+file that ships.
 
 Every test here drives the real screen functions and reads what they printed,
 because the things being asserted -- that a key quits, that a chosen length is
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-_PATH = Path(__file__).resolve().parent.parent / "src" / "netbbs" / "doors" / "bundled" / "retro_trivia.py"
+_PATH = Path(__file__).resolve().parent.parent / "retro_trivia.py"
 
 
 def _load():
