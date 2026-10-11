@@ -112,6 +112,8 @@ Pushing a tag such as `v1.0.0` runs the suite and publishes that commit's
 `retro_trivia.py`, byte-for-byte as stored in git, with a `SHA256SUMS` file.
 NetBBS vendors these releases.
 
+Implementation notes live in [docs/engineering-notes.md](docs/engineering-notes.md).
+
 The banner is drawn from the game's own launch splash by `art/render_banner.py`.
 The CP437 screen preview can be regenerated with
 `python art/render_terminal_preview.py` (development-only dependencies: Pillow
