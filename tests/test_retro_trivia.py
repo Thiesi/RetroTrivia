@@ -378,6 +378,26 @@ def test_without_a_live_input_stream_the_splash_is_not_drawn(monkeypatch):
     assert buffer.getvalue() == ""
 
 
+def test_missing_set_blocking_skips_splash_and_preserves_input(monkeypatch):
+    class PipeInput:
+        buffer = io.BytesIO(b"Q")
+
+        def fileno(self):
+            return 0
+
+    def unsupported_select(*args):
+        raise OSError("Windows cannot select a pipe")
+
+    monkeypatch.setattr(rt.sys, "stdin", PipeInput())
+    monkeypatch.setattr(rt.select, "select", unsupported_select)
+    monkeypatch.delattr(rt.os, "set_blocking", raising=False)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        assert not rt.play_splash(rt.Palette(True), {}, 80, 24)
+    assert buffer.getvalue() == ""
+    assert rt.read_key() == "Q"
+
+
 def _poll_modes():
     modes = []
     reader, writer = os.pipe()

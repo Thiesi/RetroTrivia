@@ -991,7 +991,7 @@ def _open_key_poll() -> _KeyPoll | None:
     try:
         os.set_blocking(fd, False)
         os.set_blocking(fd, True)
-    except (OSError, ValueError):
+    except (AttributeError, OSError, ValueError):
         return None
     return _KeyPoll(fd, use_select=False)
 
