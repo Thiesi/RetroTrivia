@@ -1,3 +1,5 @@
+![Retro Trivia: the classic BBS and retro computing challenge](art/banner.png)
+
 # Retro Trivia
 
 A quick, single-player trivia door game for BBSes. Pick a round of 5, 8, 12 or
@@ -34,6 +36,8 @@ along, but issue numbers in older commits and comments refer to
 Pushing a tag such as `v1.0.0` runs the suite and publishes that commit's
 `retro_trivia.py`, byte-for-byte as stored in git, with a `SHA256SUMS` file.
 NetBBS vendors these releases.
+
+The banner is drawn from the game's own launch splash by `art/render_banner.py`.
 
 ## License
 
