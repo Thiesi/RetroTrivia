@@ -83,7 +83,8 @@ def test_command_line_encoding_selection(tmp_path, monkeypatch, host, encoding):
     monkeypatch.delenv("NETBBS_DOOR_INFO", raising=False)
     args = [sys.executable, str(_PATH), "--encoding", encoding]
     if host in ("classic", "malformed"):
-        args.append(drop_file(tmp_path, count=3 if host == "malformed" else None))
+        args.append(drop_file(tmp_path, count=3 if host == "malformed" else None,
+                              changes={1: "0", 2: "0"}))
     if host == "netbbs":
         path = tmp_path / "host.json"
         path.write_text(json.dumps({"handle": "Jäger"}), encoding="utf-8")

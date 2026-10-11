@@ -163,7 +163,8 @@ def test_classic_splash_uses_only_basic_ansi_colors():
 
 @pytest.mark.parametrize("kind", ["DOOR32.SYS", "DOOR.SYS"])
 def test_command_line_plays_a_complete_round(tmp_path, kind):
-    path = drop_file(tmp_path, kind, filename="caller metadata.dat")
+    path = drop_file(tmp_path, kind, filename="caller metadata.dat",
+                     changes={1: "0", 2: "0"} if kind == "DOOR32.SYS" else {})
     result = subprocess.run([sys.executable, str(_PATH), path], input=b"1AAAAAX",
                             capture_output=True, timeout=30, env=dict(os.environ))
     assert result.returncode == 0, result.stderr

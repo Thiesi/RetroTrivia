@@ -18,8 +18,9 @@ unreadable, so a SysOp (or anyone) can try it before ever registering
 it as a door.
 
 Classic hosts can pass a DOOR32.SYS or DOOR.SYS filename on the command
-line; NETBBS_DOOR_INFO takes precedence. Stdio output is CP437 for classic
-hosts and UTF-8 for NetBBS, with a --encoding override outside NetBBS.
+line; NETBBS_DOOR_INFO takes precedence. Output is CP437 for classic hosts
+and UTF-8 for NetBBS, with a --encoding override outside NetBBS. DOOR32
+socket launches use the inherited connection with telnet filtering.
 Zero external dependencies -- see README.md for SysOp setup.
 """
 
@@ -31,6 +32,7 @@ import os
 import random
 import re
 import select
+import socket
 import sys
 import time
 import unicodedata
@@ -45,6 +47,7 @@ DIM = f"{ESC}[2m"
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\([AB0-2]|\x1b[78HDM]")
 _OUTPUT_WIDTH = 80
 _OUTPUT_ENCODING = "utf-8"
+_SOCKET_TRANSPORT: _SocketTransport | None = None
 # Screen artwork uses printable CP437 bytes, never its low control-byte glyphs.
 _CP437_TRANSLATION = str.maketrans({
     "╭": "┌", "╮": "┐", "╯": "┘", "╰": "└",
@@ -309,8 +312,11 @@ def _cp437_text(text: str) -> str:
 def out(text: str = "") -> None:
     if _OUTPUT_ENCODING == "cp437":
         text = _cp437_text(text)
-    sys.stdout.write(text)
-    sys.stdout.flush()
+    if _SOCKET_TRANSPORT is not None:
+        _SOCKET_TRANSPORT.write(text.encode(_OUTPUT_ENCODING, "strict"))
+    else:
+        sys.stdout.write(text)
+        sys.stdout.flush()
 
 
 def out_line(text: str = "") -> None:
@@ -440,6 +446,116 @@ def _active_sgr_after(text: str, active: str) -> str:
     return active
 
 
+class _CarrierLost(EOFError):
+    """The remote caller disconnected; do not print a traceback or fallback UI."""
+
+
+class _SocketTransport:
+    """Borrow the host's connection through this process's inherited handle.
+
+    Close only our handle on return, never shutdown the shared connection or
+    change its blocking mode. Telnet negotiation remains the host's job.
+    Filtering keeps constant space even for an unfinished subnegotiation.
+    """
+
+    def __init__(self, handle: int):
+        self.socket = socket.socket(fileno=handle)
+        self.mode = "text"
+        self.lost = False
+        self.after_cr = False
+
+    def waiting(self, timeout: float | None = 0) -> bool:
+        if self.lost:
+            return True
+        try:
+            return bool(select.select([self.socket], [], [], timeout)[0])
+        except OSError:
+            self.lost = True
+            return True
+
+    def __call__(self, timeout: float | None) -> bytes | None:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        for _ in range(4096):
+            if self.lost:
+                return b""
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            if not self.waiting(remaining):
+                return None
+            if self.lost:
+                return b""
+            try:
+                byte = self.socket.recv(1)
+            except BlockingIOError:
+                continue  # the host may have handed us a nonblocking socket
+            except OSError:
+                self.lost = True
+                return b""
+            if not byte:
+                self.lost = True
+                return b""
+            n = byte[0]
+            if self.mode == "option":
+                self.mode = "text"  # WILL/WONT/DO/DONT's option byte
+            elif self.mode == "sub":
+                if n == 255:
+                    self.mode = "sub_iac"
+            elif self.mode == "sub_iac":
+                self.mode = "text" if n == 240 else "sub"
+            elif self.mode == "iac":
+                self.mode = "text"
+                if n == 255:
+                    return byte  # IAC IAC is a literal data byte
+                if n in (251, 252, 253, 254):
+                    self.mode = "option"
+                elif n == 250:
+                    self.mode = "sub"
+            elif n == 255:
+                self.mode = "iac"
+            else:
+                if self.after_cr:
+                    self.after_cr = False
+                    if byte in (b"\x00", b"\n"):
+                        continue
+                self.after_cr = byte == b"\r"
+                return byte
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+        return None  # yield after a bounded run of telnet control traffic
+
+    def write(self, data: bytes) -> None:
+        if self.lost:
+            raise _CarrierLost("socket closed")
+        pending = memoryview(data.replace(b"\xff", b"\xff\xff"))
+        try:
+            while pending:
+                select.select([], [self.socket], [])
+                try:
+                    sent = self.socket.send(pending)
+                except BlockingIOError:
+                    continue
+                if not sent:
+                    raise _CarrierLost("socket closed")
+                pending = pending[sent:]
+        except (OSError, _CarrierLost) as exc:
+            self.lost = True
+            raise _CarrierLost("socket closed") from exc
+
+    def close(self) -> None:
+        # Enter can be the final key before returning to the BBS. Consume its
+        # queued CR-NUL/CR-LF trailer, but leave any next host command untouched.
+        # A bounded wait covers a split TCP read without hanging on a bare CR.
+        if self.after_cr and not self.lost:
+            try:
+                if self.waiting(0.25):
+                    trailer = self.socket.recv(1, socket.MSG_PEEK)
+                    if trailer in (b"\x00", b"\n"):
+                        self.socket.recv(1)
+            except OSError:
+                pass  # The caller may disconnect while returning to the host.
+        self.lost = True
+        self.socket.close()
+
+
 def read_key() -> str:
     """One raw byte -- see this module's own docstring for why that's
     all a door gets. A caller disconnecting mid-question doesn't reach
@@ -448,7 +564,15 @@ def read_key() -> str:
     anyway for the rarer case of stdin closing gracefully first."""
     if _PUSHBACK:
         return _PUSHBACK.pop(0)
-    data = sys.stdin.buffer.read(1)
+    if _SOCKET_TRANSPORT is not None:
+        while True:
+            data = _SOCKET_TRANSPORT(None)
+            if data is not None:
+                break
+        if not data:
+            raise _CarrierLost("socket closed")
+    else:
+        data = sys.stdin.buffer.read(1)
     if not data:
         raise EOFError("stdin closed")
     return data.decode("ascii", errors="replace")
@@ -838,10 +962,23 @@ class _KeyPoll:
         return True
 
 
+class _SocketPoll(_KeyPoll):
+    """Use the same splash key handling, after removing telnet control traffic."""
+
+    def __init__(self, transport: _SocketTransport):
+        self.transport = transport
+        self.use_select = False
+
+    def _read_now(self, size: int) -> bytes | None:
+        return self.transport(0)
+
+
 def _open_key_poll() -> _KeyPoll | None:
     """A poll of the caller's stdin, or `None` when there is no live stream to
     poll -- a test harness's stand-in stdin, a closed one -- in which case the
     splash is skipped entirely: an effect nobody can skip is only a delay."""
+    if _SOCKET_TRANSPORT is not None:
+        return _SocketPoll(_SOCKET_TRANSPORT)
     try:
         fd = sys.stdin.fileno()
     except (AttributeError, OSError, ValueError):
@@ -1682,15 +1819,34 @@ def draw_final_score(p: Palette, score: int, total: int, info: dict | None = Non
 
 
 def main(drop_file: str | None = None, *, encoding: str = "auto") -> int:
-    global _OUTPUT_WIDTH, _OUTPUT_ENCODING
+    global _OUTPUT_ENCODING, _SOCKET_TRANSPORT
 
     _OUTPUT_ENCODING = encoding
     if encoding == "auto":
         _OUTPUT_ENCODING = "cp437" if drop_file is not None else "utf-8"
     if os.environ.get("NETBBS_DOOR_INFO"):
         _OUTPUT_ENCODING = "utf-8"
-    sys.stdout.reconfigure(encoding=_OUTPUT_ENCODING, errors="strict")
     info = _load_door_info(drop_file)
+    if not os.environ.get("NETBBS_DOOR_INFO") and info.get("comm_type") == 2:
+        try:
+            _SOCKET_TRANSPORT = _SocketTransport(info["comm_handle"])
+        except OSError:
+            print("Retro Trivia: cannot open inherited DOOR32 socket.", file=sys.stderr)
+            return 1
+    else:
+        sys.stdout.reconfigure(encoding=_OUTPUT_ENCODING, errors="strict")
+    try:
+        return _play_round(info)
+    except _CarrierLost:
+        return 0
+    finally:
+        if _SOCKET_TRANSPORT is not None:
+            _SOCKET_TRANSPORT.close()
+            _SOCKET_TRANSPORT = None
+
+
+def _play_round(info: dict) -> int:
+    global _OUTPUT_WIDTH
     palette = Palette(truecolor=info.get("color_depth") == "truecolor",
                       basic=info.get("color_depth") == "16")
 
@@ -1749,7 +1905,7 @@ def main(drop_file: str | None = None, *, encoding: str = "auto") -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Retro Trivia BBS door (stdio)")
+    parser = argparse.ArgumentParser(description="Retro Trivia BBS door (stdio or DOOR32 socket)")
     parser.add_argument("drop_file", nargs="?", help="DOOR32.SYS or DOOR.SYS path")
     parser.add_argument("--encoding", choices=("auto", "utf-8", "cp437"), default="auto",
                         help="output encoding (auto: CP437 with a drop file, UTF-8 otherwise; NetBBS always UTF-8)")
