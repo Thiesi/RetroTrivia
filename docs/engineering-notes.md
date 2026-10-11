@@ -10,8 +10,9 @@ change to the door has to respect. Notes from before the move out of NetBBS
 Retro Trivia wraps a row twice, at two different layers, and only the outer one
 is a safety net. `_box_line` pads a short row and returns a long one unchanged,
 so it alone would push a border off the screen; `out_line` then passes every row
-through `_wrap_output`, which recognises a `|...|` row and re-wraps its content
-inside the borders. Nothing overflows as a result, but the fallback wrap knows
+through `_wrap_output`, which recognises a row framed by `│...│` or `║...║`
+(an ASCII `|` frame is not recognised) and re-wraps its content inside the
+borders. Nothing overflows as a result, but the fallback wrap knows
 nothing about the row it is splitting: a continuation starts hard against the
 left border rather than under the text it continues, and a header built as one
 string splits its own box border across two rows. A screen therefore has to size
