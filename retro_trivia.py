@@ -18,8 +18,9 @@ unreadable, so a SysOp (or anyone) can try it before ever registering
 it as a door.
 
 Classic hosts can pass a DOOR32.SYS or DOOR.SYS filename on the command
-line; NETBBS_DOOR_INFO takes precedence. Stdio I/O and UTF-8 output are
-required. Zero external dependencies -- see README.md for SysOp setup.
+line; NETBBS_DOOR_INFO takes precedence. Stdio output is CP437 for classic
+hosts and UTF-8 for NetBBS, with a --encoding override outside NetBBS.
+Zero external dependencies -- see README.md for SysOp setup.
 """
 
 from __future__ import annotations
@@ -43,6 +44,14 @@ DIM = f"{ESC}[2m"
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\([AB0-2]|\x1b[78HDM]")
 _OUTPUT_WIDTH = 80
+_OUTPUT_ENCODING = "utf-8"
+# Screen artwork uses printable CP437 bytes, never its low control-byte glyphs.
+_CP437_TRANSLATION = str.maketrans({
+    "╭": "┌", "╮": "┐", "╯": "┘", "╰": "└",
+    "⟦": "[", "⟧": "]", "•": "·", "…": ".",
+    "⋆": "*", "★": "*", "☆": ".", "✦": "*", "✧": "+",
+    "●": "o", "□": "o", "⚡": "!", "✔": "+", "✘": "x",
+})
 
 
 def _strip_ansi(text: str) -> str:
@@ -278,7 +287,28 @@ class Palette:
         return self._sgr((250, 250, 255), 255)
 
 
+def _cp437_text(text: str) -> str:
+    """Map artwork and transliterate unsupported caller text without '?' loss."""
+    text = text.translate(_CP437_TRANSLATION)
+    try:
+        text.encode("cp437", "strict")
+        return text
+    except UnicodeEncodeError:
+        result = []
+        for char in text:
+            try:
+                char.encode("cp437", "strict")
+                result.append(char)
+            except UnicodeEncodeError:
+                width = _char_width(char)
+                folded = unicodedata.normalize("NFKD", char).encode("ascii", "ignore").decode("ascii")
+                result.append(folded[:width].ljust(width, "_") if width else "")
+        return "".join(result)
+
+
 def out(text: str = "") -> None:
+    if _OUTPUT_ENCODING == "cp437":
+        text = _cp437_text(text)
     sys.stdout.write(text)
     sys.stdout.flush()
 
@@ -1651,10 +1681,15 @@ def draw_final_score(p: Palette, score: int, total: int, info: dict | None = Non
     out_line(f"{p.muted}Thanks for playing. Press any key to leave...{RESET}")
 
 
-def main(drop_file: str | None = None) -> int:
-    global _OUTPUT_WIDTH
+def main(drop_file: str | None = None, *, encoding: str = "auto") -> int:
+    global _OUTPUT_WIDTH, _OUTPUT_ENCODING
 
-    sys.stdout.reconfigure(encoding="utf-8")
+    _OUTPUT_ENCODING = encoding
+    if encoding == "auto":
+        _OUTPUT_ENCODING = "cp437" if drop_file is not None else "utf-8"
+    if os.environ.get("NETBBS_DOOR_INFO"):
+        _OUTPUT_ENCODING = "utf-8"
+    sys.stdout.reconfigure(encoding=_OUTPUT_ENCODING, errors="strict")
     info = _load_door_info(drop_file)
     palette = Palette(truecolor=info.get("color_depth") == "truecolor",
                       basic=info.get("color_depth") == "16")
@@ -1714,6 +1749,9 @@ def main(drop_file: str | None = None) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Retro Trivia BBS door (stdio, UTF-8 output)")
+    parser = argparse.ArgumentParser(description="Retro Trivia BBS door (stdio)")
     parser.add_argument("drop_file", nargs="?", help="DOOR32.SYS or DOOR.SYS path")
-    sys.exit(main(parser.parse_args().drop_file))
+    parser.add_argument("--encoding", choices=("auto", "utf-8", "cp437"), default="auto",
+                        help="output encoding (auto: CP437 with a drop file, UTF-8 otherwise; NetBBS always UTF-8)")
+    args = parser.parse_args()
+    sys.exit(main(args.drop_file, encoding=args.encoding))
