@@ -52,6 +52,9 @@ _OUTPUT_ENCODING = "utf-8"
 _SOCKET_TRANSPORT: _SocketTransport | None = None
 _CONSOLE_INPUT = None
 _TERMINAL_FD = None
+#: A caller whose drop file asks for no graphics gets plain ASCII: no escape
+#: sequences at all, and the artwork drawn in ASCII characters.
+_PLAIN = False
 # Screen artwork uses printable CP437 bytes, never its low control-byte glyphs.
 _CP437_TRANSLATION = str.maketrans({
     "╭": "┌", "╮": "┐", "╯": "┘", "╰": "└",
@@ -195,7 +198,10 @@ def _classic_door_info(path: Path) -> dict:
             "emulation": emulation, "minutes_left": number(19),
             "comm_port": lines[0],
         }
-    info.update(terminal_width=80, color_depth="16")
+    # DOOR32's emulation 0 is plain ASCII; DOOR.SYS's NG is no graphics and
+    # 7E seven-bit text. None of them can take ANSI sequences or CP437 art.
+    plain = emulation in (0, "NG", "7E")
+    info.update(terminal_width=80, color_depth="none" if plain else "16")
     return info
 
 
@@ -316,8 +322,37 @@ def _cp437_text(text: str) -> str:
         return "".join(result)
 
 
+#: Every CP437 glyph the screens draw with, as the ASCII character in its place.
+_ASCII_TRANSLATION = str.maketrans({
+    **{ch: "+" for ch in "┌┐└┘╔╗╚╝╠╣╞╡╟╢╤╧╪╫╬├┤┬┴┼"},
+    "─": "-", "│": "|", "═": "=", "║": "|",
+    "█": "#", "▓": "#", "▒": ":", "░": ".", "▀": "\"", "▄": "_", "■": "#", "·": ".",
+})
+#: Any escape sequence, so plain output can drop it.
+_ANY_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[ -/]*[@-~]")
+
+
+def _plain_text(text: str) -> str:
+    """`text` for a no-graphics caller: escapes removed, artwork in ASCII, and
+    anything else folded to its ASCII letters with its columns kept."""
+    text = _ANY_ESCAPE_RE.sub("", text).translate(_CP437_TRANSLATION).translate(_ASCII_TRANSLATION)
+    if text.isascii():
+        return text
+    result = []
+    for char in text:
+        if char.isascii():
+            result.append(char)
+            continue
+        width = _char_width(char)
+        folded = unicodedata.normalize("NFKD", char).encode("ascii", "ignore").decode("ascii")
+        result.append(folded[:width].ljust(width, "_") if width else "")
+    return "".join(result)
+
+
 def out(text: str = "") -> None:
-    if _OUTPUT_ENCODING == "cp437":
+    if _PLAIN:
+        text = _plain_text(text)
+    elif _OUTPUT_ENCODING == "cp437":
         text = _cp437_text(text)
     if _SOCKET_TRANSPORT is not None:
         _SOCKET_TRANSPORT.write(text.encode(_OUTPUT_ENCODING, "strict"))
@@ -1668,7 +1703,7 @@ def play_splash(p: Palette, info: dict, width: int, height: int,
     """Show the splash. Returns True if it ran (to the end or until a key),
     False if it was not shown: no live input to skip it with, typing-ahead
     already waiting, or a terminal too small for it."""
-    if splash_switched_off():
+    if splash_switched_off() or _PLAIN:
         return False
     if poll is None:
         poll = _open_key_poll()
@@ -2246,7 +2281,7 @@ def play_finale(p: Palette, info: dict, score: int, total: int, width: int, heig
                 poll: _KeyPoll | _ConsolePoll | None = None) -> bool:
     """Show the finale. Returns True if it ran (to the end or until a key),
     False if it was not shown, for the same reasons the splash would not be."""
-    if splash_switched_off():
+    if splash_switched_off() or _PLAIN:
         return False
     if poll is None:
         poll = _open_key_poll()
@@ -2539,7 +2574,9 @@ def main(drop_file: str | None = None, *, encoding: str = "auto") -> int:
 
 
 def _play_round(info: dict) -> int:
-    global _OUTPUT_WIDTH
+    global _OUTPUT_WIDTH, _PLAIN
+    # The splash and finale need ANSI cursor control; a plain caller gets neither.
+    _PLAIN = info.get("color_depth") == "none"
     palette = Palette(truecolor=info.get("color_depth") == "truecolor",
                       basic=info.get("color_depth") == "16")
 

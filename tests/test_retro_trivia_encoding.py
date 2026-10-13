@@ -100,3 +100,81 @@ def test_command_line_encoding_selection(tmp_path, monkeypatch, host, encoding):
     assert "╔".encode(expected) in result.stdout
     other = "utf-8" if expected == "cp437" else "cp437"
     assert "╔".encode(other) not in result.stdout
+
+
+# -- no-graphics callers (#16) ---------------------------------------------
+
+@pytest.mark.parametrize("kind,line,value,depth", [
+    ("DOOR32.SYS", 10, "0", "none"), ("DOOR32.SYS", 10, "1", "16"),
+    ("DOOR.SYS", 20, "NG", "none"), ("DOOR.SYS", 20, "7e", "none"), ("DOOR.SYS", 20, "GR", "16"),
+])
+def test_a_no_graphics_emulation_selects_plain_output(tmp_path, kind, line, value, depth):
+    assert rt._load_door_info(drop_file(tmp_path, kind, changes={line: value}))["color_depth"] == depth
+
+
+@pytest.mark.parametrize("width", [40, 80])
+@pytest.mark.parametrize("screen", ["title", "length", "question", "right", "wrong",
+                                   "farewell", "abandoned", "score"])
+@pytest.mark.parametrize("encoding", ["cp437", "utf-8"])
+def test_every_screen_is_plain_ascii_for_a_no_graphics_caller(monkeypatch, width, screen, encoding):
+    raw = io.BytesIO()
+    terminal = io.TextIOWrapper(raw, encoding=encoding, newline="")
+    monkeypatch.setattr(rt.sys, "stdout", terminal)
+    monkeypatch.setattr(rt, "_OUTPUT_ENCODING", encoding)
+    monkeypatch.setattr(rt, "_OUTPUT_WIDTH", width)
+    monkeypatch.setattr(rt, "_PLAIN", True)
+    monkeypatch.setattr(rt, "read_key", lambda: "1" if screen == "length" else "A")
+    p = rt.Palette(False, basic=True)
+    info = {"handle": "Jäger 界", "node_name": "Test BBS"}
+    w = width - 2
+    {
+        "title": lambda: rt.draw_title(p, info, width=w),
+        "length": lambda: rt.ask_round_length(p, width=w),
+        "question": lambda: rt.ask_question(p, 1, 5, *rt.QUESTIONS[0][:2], width=w),
+        "right": lambda: rt.draw_result(p, True, "A) ANSI", width=w),
+        "wrong": lambda: rt.draw_result(p, False, "A) ANSI", width=w),
+        "farewell": lambda: rt.draw_farewell(p, width=w),
+        "abandoned": lambda: rt.draw_abandoned(p, 2, 3, width=w),
+        "score": lambda: rt.draw_final_score(p, 3, 5, info, width=w),
+    }[screen]()
+    terminal.flush()
+    data = raw.getvalue()
+    assert data and b"\x1b" not in data
+    assert all(32 <= byte < 127 or byte in b"\r\n" for byte in data), data
+    if screen in ("title", "score"):
+        assert b"Jager __" in data  # caller text folded to ASCII, its columns kept
+    for row in data.decode("ascii").split("\r\n"):
+        assert len(row) <= width
+
+
+def test_a_no_graphics_caller_gets_no_splash_or_finale(monkeypatch):
+    monkeypatch.delenv("DOOR_SPLASH", raising=False)
+    monkeypatch.setattr(rt, "_PLAIN", True)
+
+    class Poll:
+        def waiting(self, timeout):
+            return False
+
+        def take(self, timeout):
+            return False
+
+    buffer = io.StringIO()
+    monkeypatch.setattr(rt.sys, "stdout", buffer)
+    assert not rt.play_splash(rt.Palette(False, basic=True), {}, 80, 24, poll=Poll())
+    assert not rt.play_finale(rt.Palette(False, basic=True), {}, 5, 5, 80, 24, poll=Poll())
+    assert buffer.getvalue() == ""
+
+
+@pytest.mark.parametrize("kind,changes", [
+    ("DOOR32.SYS", {1: "0", 2: "0", 10: "0"}), ("DOOR.SYS", {20: "NG"}), ("DOOR.SYS", {20: "7E"}),
+])
+def test_command_line_plays_a_plain_round(tmp_path, kind, changes):
+    path = drop_file(tmp_path, kind, changes=changes)
+    env = dict(os.environ)
+    env.pop("DOOR_SPLASH", None)  # the splash and finale must stay off by themselves
+    result = subprocess.run([sys.executable, str(_PATH), path], input=b"1AAAAAX",
+                            capture_output=True, timeout=30, env=env)
+    assert result.returncode == 0, result.stderr
+    assert b"Final score:" in result.stdout
+    assert b"\x1b" not in result.stdout
+    assert all(32 <= byte < 127 or byte in b"\r\n" for byte in result.stdout)
