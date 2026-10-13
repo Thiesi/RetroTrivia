@@ -28,7 +28,7 @@ def test_all_authored_glyphs_have_deliberate_cp437_forms():
 
 @pytest.mark.parametrize("width", [40, 80])
 @pytest.mark.parametrize("screen", ["title", "length", "question", "right", "wrong",
-                                   "farewell", "abandoned", "score", "splash"])
+                                   "farewell", "abandoned", "score", "splash", "finale"])
 def test_every_screen_writes_strict_cp437_bytes(monkeypatch, width, screen):
     raw = io.BytesIO()
     terminal = io.TextIOWrapper(raw, encoding="cp437", newline="")
@@ -58,6 +58,8 @@ def test_every_screen_writes_strict_cp437_bytes(monkeypatch, width, screen):
         "abandoned": lambda: rt.draw_abandoned(p, 2, 3, width=w),
         "score": lambda: rt.draw_final_score(p, 3, 5, info, width=w),
         "splash": lambda: [rt.out(frame) for frame in rt.splash_frames(p, info, width, 24)],
+        "finale": lambda: [rt.out(frame) for score in (5, 3, 1)
+                           for frame in rt.finale_frames(p, info, score, 5, width, 24)],
     }
     actions[screen]()
     data = raw.getvalue()
