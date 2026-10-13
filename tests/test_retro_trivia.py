@@ -507,3 +507,140 @@ def test_left_to_run_it_waits_for_a_key_under_a_prompt(width, height):
     shown = buffer.getvalue()
     assert "any key to begin" in shown or "PRESS ANY KEY" in shown or "ANY KEY" in shown
     assert shown.endswith("\x1b[2J\x1b[H\x1b[?25h")
+
+
+# -- the finale ------------------------------------------------------------
+
+@pytest.mark.parametrize("score,total,kind", [
+    (8, 8, "jackpot"), (1, 1, "jackpot"), (7, 8, "applause"), (4, 8, "applause"),
+    (3, 8, "lights_out"), (0, 8, "lights_out"), (0, 1, "lights_out"),
+])
+def test_the_score_decides_the_finale(score, total, kind):
+    assert rt.finale_kind(score, total) == kind
+
+
+_FINALE_SCORES = [(8, 8), (6, 8), (2, 8), (0, 3), (77, 100)]
+
+
+@pytest.mark.parametrize("width,height", [(40, 12), (60, 18), (80, 24), (132, 50)])
+@pytest.mark.parametrize("score,total", _FINALE_SCORES)
+@pytest.mark.parametrize("truecolor", [True, False])
+def test_every_finale_frame_stays_inside_its_terminal(width, height, score, total, truecolor):
+    frames = rt.finale_frames(rt.Palette(truecolor=truecolor), {"handle": "keeper", "node_name": "Harbor Lights"},
+                              score, total, width, height)
+    assert frames and len(frames) == rt.FINALE_FRAMES
+    cells = _cells_written(frames)
+    assert all(1 <= row <= height and 1 <= col <= width - 1 for row, col in cells)
+    assert sum(len(frame.encode()) for frame in frames) < 40_000 or width > 80
+
+
+@pytest.mark.parametrize("width,height", [(40, 12), (80, 24)])
+@pytest.mark.parametrize("score,total,shows", [
+    (8, 8, ["8 / 8", "SYSOP MATERIAL"]),
+    (6, 8, ["APPLAUSE", "SEASONED CALLER"]),
+    (4, 8, ["APPLAUSE", "GETTING THERE"]),
+    (2, 8, ["2 / 8", "KEEP DIALING IN"]),
+])
+def test_each_finale_shows_its_own_show(width, height, score, total, shows):
+    frames = rt.finale_frames(rt.Palette(truecolor=True), {"handle": "keeper"}, score, total, width, height)
+    # The lights-out stage is looked at before its iris closes.
+    drawn = "\n".join(_screen_rows(frames[:15] if score < total / 2 else frames))
+    for text in shows:
+        if text != "KEEP DIALING IN" or height >= 16:  # a short terminal has no room for it
+            assert text in drawn
+    if score < total / 2:
+        assert "NEWBIE" in drawn and "keeper" in drawn
+        final = "\n".join(_screen_rows(frames))
+        assert f"{score} / {total}" in final and "keeper" not in final
+    else:
+        assert "keeper" in drawn
+
+
+def test_the_finale_is_not_drawn_where_it_does_not_fit():
+    p = rt.Palette(truecolor=True)
+    assert rt.finale_frames(p, {}, 3, 5, 39, 24) is None
+    assert rt.finale_frames(p, {}, 3, 5, 80, 11) is None
+    assert rt.finale_frames(p, {}, 0, 0, 80, 24) is None
+
+
+@pytest.mark.parametrize("score", [5, 3, 1])
+def test_a_hostile_handle_cannot_reach_the_terminal_through_the_finale(score):
+    frames = rt.finale_frames(rt.Palette(truecolor=True),
+                              {"handle": "\x1b[2Jx\x07" + "界" * 40}, score, 5, 40, 12)
+    drawn = "".join(frames)
+    assert drawn.count("\x1b[2J") == 1
+    assert "\x07" not in drawn and "\x1b]" not in drawn
+    assert all(col <= 39 for _, col in _cells_written(frames))
+
+
+def test_a_key_ends_the_finale_at_once_and_hands_over_a_clear_screen():
+    poll = _FakePoll(key_after=3)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        assert rt.play_finale(rt.Palette(truecolor=True), {"handle": "keeper"}, 8, 8, 80, 24, poll=poll)
+    assert poll.takes == 4
+    assert buffer.getvalue().endswith("\x1b[2J\x1b[H\x1b[?25h")
+
+
+def test_left_to_run_the_finale_hands_over_without_waiting_for_a_key():
+    """The results screen behind it waits for the key; the finale must not
+    ask for a second one."""
+    poll = _FakePoll()
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        assert rt.play_finale(rt.Palette(truecolor=True), {"handle": "keeper"}, 2, 8, 80, 24, poll=poll)
+    assert poll.takes == rt.FINALE_FRAMES
+    assert buffer.getvalue().endswith("\x1b[2J\x1b[H\x1b[?25h")
+
+
+def test_typing_ahead_skips_the_finale_and_draws_nothing():
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        shown = rt.play_finale(rt.Palette(truecolor=True), {}, 8, 8, 80, 24, poll=_FakePoll(typed_ahead=True))
+    assert not shown and buffer.getvalue() == ""
+
+
+def test_typing_already_in_the_stdin_buffer_skips_the_finale_and_is_kept(monkeypatch):
+    """By the finale, `read_key` has been reading through Python's buffered
+    stdin, which may hold bytes a poll of the descriptor cannot see."""
+    reader, writer = os.pipe()
+    stdin = io.TextIOWrapper(io.open(reader, "rb", buffering=8192))
+    try:
+        monkeypatch.setattr(rt.sys, "stdin", stdin)
+        os.write(writer, b"Ax")
+        assert rt.read_key() == "A"  # the buffer now holds the "x"
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            assert not rt.play_finale(rt.Palette(truecolor=True), {}, 8, 8, 80, 24, poll=_FakePoll())
+        assert buffer.getvalue() == ""
+        assert rt.read_key() == "x"
+    finally:
+        stdin.close()
+        os.close(writer)
+
+
+@pytest.mark.parametrize("value", ["0", "off"])
+def test_switching_the_splash_off_switches_the_finale_off(monkeypatch, value):
+    monkeypatch.setenv("DOOR_SPLASH", value)
+    poll = _FakePoll()
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        assert not rt.play_finale(rt.Palette(truecolor=True), {}, 8, 8, 80, 24, poll=poll)
+    assert buffer.getvalue() == "" and poll.takes == 0
+
+
+def test_a_finished_round_plays_its_finale_before_the_results(monkeypatch):
+    answers = {question: correct for question, _, correct in rt.QUESTIONS}
+    shown = []
+    monkeypatch.setattr(rt.random, "shuffle", lambda items: None)
+    monkeypatch.setattr(rt, "ask_round_length", lambda p, width: 3)
+    monkeypatch.setattr(rt, "ask_question", lambda p, n, total, question, choices, width: answers[question])
+    monkeypatch.setattr(rt, "draw_result", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rt, "play_splash", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "draw_title", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rt, "play_finale", lambda p, info, score, total, w, h: shown.append(("finale", score, total)))
+    monkeypatch.setattr(rt, "draw_final_score", lambda p, score, total, **kwargs: shown.append(("results", score, total)))
+    monkeypatch.setattr(rt, "read_key", lambda: "x")
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert rt._play_round({"handle": "keeper"}) == 0
+    assert shown == [("finale", 3, 3), ("results", 3, 3)]

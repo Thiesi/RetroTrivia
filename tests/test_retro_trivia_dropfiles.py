@@ -155,8 +155,12 @@ def test_neutral_host_on_every_screen(capsys):
     assert rt._Splash(palette, {}, 80, 24, random.Random(1)).node == "Local"
 
 
-def test_classic_splash_uses_only_basic_ansi_colors():
-    frames = list(rt.splash_frames(rt.Palette(False, basic=True), {}, 80, 24))
+@pytest.mark.parametrize("show", ["splash", "jackpot", "applause", "lights_out"])
+def test_classic_splash_uses_only_basic_ansi_colors(show):
+    palette = rt.Palette(False, basic=True)
+    scores = {"jackpot": 5, "applause": 3, "lights_out": 1}
+    frames = (list(rt.splash_frames(palette, {}, 80, 24)) if show == "splash"
+              else rt.finale_frames(palette, {}, scores[show], 5, 80, 24))
     assert frames
     for frame in frames:
         assert "38;" not in frame and "48;" not in frame
