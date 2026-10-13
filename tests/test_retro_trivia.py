@@ -600,6 +600,8 @@ def test_typing_ahead_skips_the_finale_and_draws_nothing():
     assert not shown and buffer.getvalue() == ""
 
 
+@pytest.mark.skipif(not hasattr(os, "set_blocking"),
+                    reason="without os.set_blocking a Windows pipe has no poll, so no finale")
 def test_typing_already_in_the_stdin_buffer_skips_the_finale_and_is_kept(monkeypatch):
     """By the finale, `read_key` has been reading through Python's buffered
     stdin, which may hold bytes a poll of the descriptor cannot see."""
