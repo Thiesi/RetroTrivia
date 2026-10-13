@@ -589,8 +589,33 @@ def test_left_to_run_the_finale_hands_over_without_waiting_for_a_key():
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         assert rt.play_finale(rt.Palette(truecolor=True), {"handle": "keeper"}, 2, 8, 80, 24, poll=poll)
-    assert poll.takes == rt.FINALE_FRAMES
+    assert poll.takes == rt.FINALE_FRAMES + 1  # every frame, then the timed hold
     assert buffer.getvalue().endswith("\x1b[2J\x1b[H\x1b[?25h")
+
+
+class _RecordingPoll(_FakePoll):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.timeouts = []
+
+    def take(self, timeout):
+        self.timeouts.append(timeout)
+        return super().take(timeout)
+
+
+def test_the_finale_holds_its_last_picture_before_handing_over():
+    poll = _RecordingPoll()
+    with contextlib.redirect_stdout(io.StringIO()):
+        rt.play_finale(rt.Palette(truecolor=True), {"handle": "keeper"}, 8, 8, 80, 24, poll=poll)
+    assert poll.timeouts[-1] == rt.FINALE_HOLD_SECONDS >= 3
+    assert poll.timeouts[:-1] == [rt.SPLASH_FRAME_SECONDS] * rt.FINALE_FRAMES
+
+
+def test_a_key_during_the_finale_skips_the_hold_too():
+    poll = _RecordingPoll(key_after=3)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rt.play_finale(rt.Palette(truecolor=True), {"handle": "keeper"}, 8, 8, 80, 24, poll=poll)
+    assert rt.FINALE_HOLD_SECONDS not in poll.timeouts
 
 
 def test_typing_ahead_skips_the_finale_and_draws_nothing():
