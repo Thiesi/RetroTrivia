@@ -45,6 +45,12 @@ NetBBS keeps its existing host defaults and colour selection. An unreadable
 or malformed classic file emits a warning to stderr and starts with Guest,
 Local, 80×24 and 16-colour defaults. No session data is saved.
 
+On NetBBS (door API 5) a perfect round is reported as a `perfect` game event,
+so a chat bot can announce it, but only while the SysOp has game events on
+for the door (`outbound.events` in `door_info.json`). Otherwise, and on every
+other host, nothing is written. There are no standings: the door keeps no
+scores between launches.
+
 Foreign drop files default to **CP437 output**. Use `--encoding utf-8` for a
 UTF-8 terminal/bridge, or `--encoding cp437` to force CP437 when trying the
 game standalone. `--encoding auto` is the default: CP437 with a classic drop
