@@ -755,3 +755,23 @@ def test_a_finished_round_plays_its_finale_before_the_results(monkeypatch):
     with contextlib.redirect_stdout(io.StringIO()):
         assert rt._play_round({"handle": "keeper"}) == 0
     assert shown == [("finale", 3, 3), ("results", 3, 3)]
+
+
+@pytest.mark.parametrize("plain", [False, True])
+def test_the_round_opens_on_a_clean_screen(monkeypatch, plain):
+    # Question 1 used to appear under the leftover masthead and picker (#22).
+    # A plain caller takes no escape sequences, so their round just scrolls on.
+    monkeypatch.setattr(rt, "ask_round_length", lambda p, width: 2)
+    monkeypatch.setattr(rt, "play_splash", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "play_finale", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "read_key", lambda: "A")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rt._play_round({"handle": "keeper", "color_depth": "none" if plain else "256"})
+    drawn = buffer.getvalue()
+    if plain:
+        assert "\x1b" not in drawn
+    else:
+        assert drawn.count("\x1b[2J") == 1
+        assert drawn.index("\x1b[2J") < drawn.index("QUESTION 1 OF 2")
+        assert drawn.index("\x1b[2J") > drawn.index("R E T R O")

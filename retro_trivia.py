@@ -888,7 +888,7 @@ QUESTIONS = [
     ("Which word processor dominated DOS offices and is remembered for its function-key template?", ["WordPerfect", "WordStar", "Word for DOS", "Ami Pro"], 0),
     ("Which spreadsheet was the DOS era's business standard before Excel?", ["Lotus 1-2-3", "VisiCalc", "Quattro Pro", "Multiplan"], 0),
     ("What frequency did a blue box use to seize a long-distance trunk?", ["2600 Hz", "1200 Hz", "440 Hz", "300 Hz"], 0),
-    ("Which magazine took its name from that frequency?", ["2600: The Hacker Quarterly", "Phrack", "Wired", "Byte"], 0),
+    ("Which hacker magazine was named after the tone a blue box used to seize a trunk line?", ["2600: The Hacker Quarterly", "Phrack", "Wired", "Byte"], 0),
     ("Which electronic magazine began publishing in 1985 from the BBS underground?", ["Phrack", "2600", "Dr. Dobb's", "Boardwatch"], 0),
     ("By what nickname was phone phreak John Draper known?", ["Captain Crunch", "The Condor", "Dark Dante", "Cap'n Zap"], 0),
     ("What was Operation Sundevil?", ["A 1990 US crackdown on BBS-linked computer crime", "A modem standard", "A FidoNet backbone", "An early ISP"], 0),
@@ -2283,8 +2283,9 @@ def play_finale(p: Palette, info: dict, score: int, total: int, width: int, heig
 # frame is kept for the results. Answer keys are podium buttons -- gold on
 # dark until pressed, lit gold once they are -- and the round runs along the
 # top edge as a row of marquee bulbs: right, wrong, the question being asked,
-# and the questions still to come. The screen scrolls and is never cleared, so
-# the previous verdict stays in view above the next card.
+# and the questions still to come. The screen is cleared once, when the round
+# starts; after that it scrolls, so the previous verdict stays in view above
+# the next card.
 
 #: What a caller reads: the question and its answers.
 _INK = ((250, 246, 236), 255)
@@ -2729,6 +2730,10 @@ def _play_round(info: dict) -> int:
             return 0
 
         round_questions = random.sample(QUESTIONS, k=min(wanted, len(QUESTIONS)))
+        if not _PLAIN:
+            # The round opens on a clean screen rather than under the leftover
+            # masthead and picker; from here on the questions scroll.
+            out(f"{RESET}{ESC}[2J{ESC}[H")
         for i, (question, choices, correct_index) in enumerate(round_questions, start=1):
             correct_answer = choices[correct_index]
             display_choices = choices.copy()
