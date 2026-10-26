@@ -115,8 +115,18 @@ along, but issue numbers in older commits and comments refer to
 ## Releases
 
 Pushing a tag such as `v1.0.0` runs the suite and publishes that commit's
-`retro_trivia.py`, byte-for-byte as stored in git, with a `SHA256SUMS` file.
-NetBBS vendors these releases.
+`retro_trivia.py`, byte-for-byte as stored in git, with the NetBBS door profile
+`netbbs.json` (from `profiles/`) and a `SHA256SUMS` file covering both. NetBBS
+vendors these releases.
+
+Every release's notes open with a **NetBBS** line saying whether the saved data
+changed. Retro Trivia keeps none, so the line always says any release can run
+ahead of the copy NetBBS bundles. To do that, follow NetBBS's door guide,
+[Running a newer game release](https://github.com/Thiesi/NetBBS/blob/main/docs/NetBBS-door-guide.md#running-a-newer-game-release):
+verify the checksums, import `netbbs.json` with **[J] Import JSON**, and replace
+its example `executable_path` and `install_dir` with the paths on your host. The
+profile leaves `resize_signal` off because the door does not handle `SIGUSR1`,
+whose default action would end the game.
 
 Implementation notes live in [docs/engineering-notes.md](docs/engineering-notes.md).
 

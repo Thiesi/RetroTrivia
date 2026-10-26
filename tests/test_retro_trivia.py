@@ -131,7 +131,8 @@ def test_the_quit_key_is_advertised_on_the_question(keys):
     keys("A")
     _, drawn = _drawn(lambda: rt.ask_question(
         rt.Palette(truecolor=True), 1, 5, "Q?", ["a", "b", "c", "d"], width=78))
-    assert f"[{rt.QUIT_KEY}]" in drawn
+    # In the card's bottom edge, where it stays in view without crowding the prompt.
+    assert f"{rt.QUIT_KEY} quits" in drawn
 
 
 def test_abandoning_reports_only_what_was_answered():
@@ -165,13 +166,13 @@ def test_an_exhausted_input_falls_back_to_the_classic_round(keys):
 
 def test_the_masthead_does_not_name_a_length_it_cannot_know():
     # The title is printed before the picker and the door never redraws it, so
-    # a number in this chip would be a guess. An earlier revision took a
-    # `questions` argument that nothing in `main()` ever passed, which made the
-    # branch naming a length unreachable in play while a unit test called it
+    # a number in it would be a guess. An earlier revision took a `questions`
+    # argument that nothing in `main()` ever passed, which made the branch
+    # naming a length unreachable in play while a unit test called it
     # directly and looked green.
     _, drawn = _drawn(lambda: rt.draw_title(rt.Palette(truecolor=True), {}, width=78))
-    assert "YOU CHOOSE" in drawn
-    assert "QUESTIONS" not in drawn.replace("YOU CHOOSE", "")
+    assert "questions" not in drawn.lower()
+    assert not re.search(r"\d", drawn)
     import inspect
     assert "questions" not in inspect.signature(rt.draw_title).parameters
 
@@ -238,7 +239,7 @@ def test_a_wrapped_choice_continues_under_its_own_marker(keys, terminal):
     _, drawn = _drawn(lambda: rt.ask_question(
         rt.Palette(truecolor=True), 1, 5, "Q?", [choice, "b", "c", "d"], width=40))
     rows = [row for row in _rows(drawn) if row.startswith("│")]
-    first = next(i for i, row in enumerate(rows) if "[A]" in row)
+    first = next(i for i, row in enumerate(rows) if "Eight" in row)
     # Where the answer's own text begins on its first row is the column its
     # continuation has to start in; deriving it beats hardcoding the marker.
     text_column = rows[first].index("Eight")
@@ -258,6 +259,89 @@ def test_the_question_header_keeps_its_box_on_one_row(keys, terminal):
     opening = [row for row in _rows(drawn) if row.startswith("╭")]
     assert len(opening) == 1, opening
     assert opening[0].endswith("╮"), opening[0]
+
+
+# -- the round's bulbs and verdicts --------------------------------------
+
+
+def test_the_bulbs_carry_the_round_so_far(keys):
+    keys("A")
+    _, drawn = _drawn(lambda: rt.ask_question(
+        rt.Palette(truecolor=True), 4, 6, "Q?", ["a", "b", "c", "d"], width=78,
+        record=[True, False, True]))
+    [edge] = [row for row in _rows(drawn) if row.startswith("╭")]
+    assert edge.endswith("■ × ■ ● · · ─╮"), edge
+
+
+def test_a_round_too_long_for_its_bulbs_keeps_the_count(keys):
+    keys("A")
+    _, drawn = _drawn(lambda: rt.ask_question(
+        rt.Palette(truecolor=True), 12, 20, "Q?", ["a", "b", "c", "d"], width=40,
+        record=[True] * 11))
+    [edge] = [row for row in _rows(drawn) if row.startswith("╭")]
+    assert "QUESTION 12/20" in edge and "●" not in edge and len(edge) == 40, edge
+
+
+def test_the_results_card_shows_the_round_bulb_by_bulb():
+    record = [True, True, False, True, True]
+    _, drawn = _drawn(lambda: rt.draw_final_score(
+        rt.Palette(truecolor=True), 4, 5, {"handle": "keeper"}, width=78, record=record))
+    assert "Final score: 4/5" in drawn
+    assert "■ ■ × ■ ■" in drawn and "keeper" in drawn
+
+
+def test_a_plain_caller_reads_bracketed_labels(monkeypatch):
+    monkeypatch.setattr(rt, "_PLAIN", True)
+    _, drawn = _drawn(lambda: rt.draw_result(rt.Palette(False, basic=True), False, "C", "XMODEM"))
+    assert "[NOT QUITE]  The answer was [C] XMODEM" in drawn
+
+
+class _QuietPoll:
+    def __init__(self, typed: bool = False):
+        self.typed = typed
+
+    def waiting(self, timeout):
+        return self.typed
+
+    def take(self, timeout):
+        return False
+
+
+def _flicker(monkeypatch, *, poll, plain=False):
+    """Draw a verdict and return what was written and how often it paused."""
+    pauses = []
+    monkeypatch.setattr(rt.time, "sleep", pauses.append)
+    monkeypatch.setattr(rt, "_open_key_poll", lambda: poll)
+    monkeypatch.setattr(rt, "_stdin_holds_typing", lambda: False)
+    monkeypatch.setattr(rt, "_PLAIN", plain)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rt.draw_result(rt.Palette(truecolor=True), True, "B", "XMODEM", width=78)
+    return buffer.getvalue(), pauses
+
+
+def test_a_verdict_flickers_on_and_lands_lit(monkeypatch):
+    written, pauses = _flicker(monkeypatch, poll=_QuietPoll())
+    assert len(pauses) == 4 and sum(pauses) < 0.5
+    # Each step rewrites the row from its start: on, off, on, off, and the row
+    # it lands on is the lit one.
+    steps = written.split("\r")
+    p = rt.Palette(truecolor=True)
+    lit = rt._chip(p, "CORRECT", rt._KEY_INK, rt._RIGHT_LIT)
+    dark = rt._chip(p, "CORRECT", rt._RIGHT_OFF_TEXT, rt._RIGHT_OFF)
+    assert [lit in step for step in steps[1:5]] == [True, False, True, False]
+    assert [dark in step for step in steps[1:5]] == [False, True, False, True]
+    assert lit in steps[5] and steps[6] == "\n" and len(steps) == 7
+    assert "\n" not in "".join(steps[:-1]), "a flicker step must not move to a new row"
+
+
+@pytest.mark.parametrize("why", ["typing", "plain", "no live input", "switched off"])
+def test_a_verdict_does_not_flicker(monkeypatch, why):
+    if why == "switched off":
+        monkeypatch.setenv("DOOR_SPLASH", "0")
+    poll = None if why == "no live input" else _QuietPoll(typed=why == "typing")
+    written, pauses = _flicker(monkeypatch, poll=poll, plain=why == "plain")
+    assert pauses == [] and written.count("\r") == 1, written
 
 
 # -- the launch splash ---------------------------------------------------
@@ -661,7 +745,7 @@ def test_a_finished_round_plays_its_finale_before_the_results(monkeypatch):
     shown = []
     monkeypatch.setattr(rt.random, "shuffle", lambda items: None)
     monkeypatch.setattr(rt, "ask_round_length", lambda p, width: 3)
-    monkeypatch.setattr(rt, "ask_question", lambda p, n, total, question, choices, width: answers[question])
+    monkeypatch.setattr(rt, "ask_question", lambda p, n, total, question, choices, width, record: answers[question])
     monkeypatch.setattr(rt, "draw_result", lambda *args, **kwargs: None)
     monkeypatch.setattr(rt, "play_splash", lambda *args, **kwargs: False)
     monkeypatch.setattr(rt, "draw_title", lambda *args, **kwargs: None)
@@ -671,3 +755,23 @@ def test_a_finished_round_plays_its_finale_before_the_results(monkeypatch):
     with contextlib.redirect_stdout(io.StringIO()):
         assert rt._play_round({"handle": "keeper"}) == 0
     assert shown == [("finale", 3, 3), ("results", 3, 3)]
+
+
+@pytest.mark.parametrize("plain", [False, True])
+def test_the_round_opens_on_a_clean_screen(monkeypatch, plain):
+    # Question 1 used to appear under the leftover masthead and picker (#22).
+    # A plain caller takes no escape sequences, so their round just scrolls on.
+    monkeypatch.setattr(rt, "ask_round_length", lambda p, width: 2)
+    monkeypatch.setattr(rt, "play_splash", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "play_finale", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "read_key", lambda: "A")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rt._play_round({"handle": "keeper", "color_depth": "none" if plain else "256"})
+    drawn = buffer.getvalue()
+    if plain:
+        assert "\x1b" not in drawn
+    else:
+        assert drawn.count("\x1b[2J") == 1
+        assert drawn.index("\x1b[2J") < drawn.index("QUESTION 1 OF 2")
+        assert drawn.index("\x1b[2J") > drawn.index("R E T R O")

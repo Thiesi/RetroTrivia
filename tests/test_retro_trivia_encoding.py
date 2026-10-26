@@ -52,8 +52,8 @@ def test_every_screen_writes_strict_cp437_bytes(monkeypatch, width, screen):
         "title": lambda: rt.draw_title(p, info, width=w),
         "length": lambda: rt.ask_round_length(p, width=w),
         "question": lambda: rt.ask_question(p, 1, 5, *rt.QUESTIONS[0][:2], width=w),
-        "right": lambda: rt.draw_result(p, True, "A) ANSI", width=w),
-        "wrong": lambda: rt.draw_result(p, False, "A) ANSI", width=w),
+        "right": lambda: rt.draw_result(p, True, "A", "ANSI", width=w),
+        "wrong": lambda: rt.draw_result(p, False, "A", "ANSI", width=w),
         "farewell": lambda: rt.draw_farewell(p, width=w),
         "abandoned": lambda: rt.draw_abandoned(p, 2, 3, width=w),
         "score": lambda: rt.draw_final_score(p, 3, 5, info, width=w),
@@ -97,9 +97,10 @@ def test_command_line_encoding_selection(tmp_path, monkeypatch, host, encoding):
     expected = ("utf-8" if host == "netbbs" else
                 ("cp437" if host in ("classic", "malformed") else "utf-8")
                 if encoding == "auto" else encoding)
-    assert "╔".encode(expected) in result.stdout
+    # The round card's frame: CP437 has the glyph, so either encoding can draw it.
+    assert "─".encode(expected) in result.stdout
     other = "utf-8" if expected == "cp437" else "cp437"
-    assert "╔".encode(other) not in result.stdout
+    assert "─".encode(other) not in result.stdout
 
 
 # -- no-graphics callers (#16) ---------------------------------------------
@@ -131,8 +132,8 @@ def test_every_screen_is_plain_ascii_for_a_no_graphics_caller(monkeypatch, width
         "title": lambda: rt.draw_title(p, info, width=w),
         "length": lambda: rt.ask_round_length(p, width=w),
         "question": lambda: rt.ask_question(p, 1, 5, *rt.QUESTIONS[0][:2], width=w),
-        "right": lambda: rt.draw_result(p, True, "A) ANSI", width=w),
-        "wrong": lambda: rt.draw_result(p, False, "A) ANSI", width=w),
+        "right": lambda: rt.draw_result(p, True, "A", "ANSI", width=w),
+        "wrong": lambda: rt.draw_result(p, False, "A", "ANSI", width=w),
         "farewell": lambda: rt.draw_farewell(p, width=w),
         "abandoned": lambda: rt.draw_abandoned(p, 2, 3, width=w),
         "score": lambda: rt.draw_final_score(p, 3, 5, info, width=w),
