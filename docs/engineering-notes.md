@@ -24,3 +24,26 @@ the row leaves the cursor nowhere to sit but the next line. The door draws at
 `min(78, terminal_width)`, so the 40-column floor and the 78-column cap are live
 paths for the same string.
 
+
+## The round's screens
+
+The splash and finale are a game-show stage; the screens between them are the
+contestant's card on it, and they take only the stage's colours and devices.
+Keep to that vocabulary rather than adding to it: one rounded card per screen
+with its title in the top edge and its hint (`Q quits`) in the bottom one, the
+double frame only for the results, gold keys that are dark until pressed, and
+lit labels (the splash's lower third) for verdicts and the rank. Green and red
+mean right and wrong and nothing else.
+
+The bulb row in a question's top edge is the round so far -- right, wrong, the
+current question, the rest -- and the results card repeats it as the record of
+the round. It is dropped, never wrapped, when the edge has no room for it.
+
+Plain callers see no colour, so anything that colour alone distinguishes needs
+a shape as well: a lit label becomes `[LABEL]`, and a dim marquee bulb a dot.
+
+The verdict's flicker is the only motion in a round. It follows the splash's
+rules where they apply: it runs only with a live input to poll, never when
+typing-ahead is waiting (it reads nothing, so it could only delay that caller),
+never for a plain caller, and `DOOR_SPLASH=0` turns it off. Every step rewrites
+the same row from its start, so the row must stay narrower than the terminal.

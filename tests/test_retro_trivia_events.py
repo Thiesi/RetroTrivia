@@ -94,7 +94,7 @@ def _play(monkeypatch, info, answers):
     right = {question: choices[index] for question, choices, index in rt.QUESTIONS}
     plan = iter(answers)
 
-    def ask(p, number, total, question, choices, width=78):
+    def ask(p, number, total, question, choices, width=78, record=None):
         answer = next(plan)
         if answer is None:
             return None
