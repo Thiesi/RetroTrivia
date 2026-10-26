@@ -1,0 +1,19 @@
+{
+  "name": "Retro Trivia",
+  "executable_path": "/usr/local/bin/python3",
+  "args": ["{install_dir}/retro_trivia.py"],
+  "profile": {
+    "version": 1,
+    "adapter": "native",
+    "endpoint": "stdio",
+    "install_dir": "/var/games/netbbs/retro-trivia",
+    "encoding": "utf-8",
+    "width": 0,
+    "height": 0,
+    "resize_signal": false,
+    "time_limit": 3600,
+    "cpu_seconds": 300,
+    "max_sessions": 8,
+    "multinode_certified": true
+  }
+}
