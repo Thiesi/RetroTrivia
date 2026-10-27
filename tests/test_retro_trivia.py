@@ -758,20 +758,51 @@ def test_a_finished_round_plays_its_finale_before_the_results(monkeypatch):
 
 
 @pytest.mark.parametrize("plain", [False, True])
-def test_the_round_opens_on_a_clean_screen(monkeypatch, plain):
-    # Question 1 used to appear under the leftover masthead and picker (#22).
-    # A plain caller takes no escape sequences, so their round just scrolls on.
+def test_each_question_opens_on_a_clean_screen(monkeypatch, plain):
+    # Question 1 used to appear under the leftover masthead and picker (#22),
+    # and the earlier questions stayed above each card. Now every question
+    # clears the screen, and the last verdict is drawn again at its top. A
+    # plain caller takes no escape sequences, so their round just scrolls on.
+    monkeypatch.setattr(rt, "ask_round_length", lambda p, width: 3)
+    monkeypatch.setattr(rt, "play_splash", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "play_finale", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "draw_result", lambda p, correct, letter, answer, width: print(f"<verdict {answer}>"))
+    monkeypatch.setattr(rt, "read_key", lambda: "A")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rt._play_round({"handle": "keeper", "color_depth": "none" if plain else "256"})
+    drawn = buffer.getvalue()
+    verdicts = [part.split(">")[0] for part in drawn.split("<verdict ")[1:]]
+    # Each answer's verdict is shown once, and none is lost.
+    assert len(verdicts) == 3
+    if plain:
+        assert "\x1b" not in drawn
+        return
+    screens = drawn.split("\x1b[2J")
+    assert len(screens) == 4  # the title, then one per question
+    assert "R E T R O" in screens[0]
+    for number, screen in enumerate(screens[1:], start=1):
+        assert f"QUESTION {number} OF 3" in screen
+        before_card = screen.split("QUESTION")[0]
+        # The verdict on the previous answer leads the screen, above the card.
+        assert ("<verdict" in before_card) == (number > 1)
+    # The last verdict has no next screen: it is drawn under its own card.
+    assert screens[3].index("QUESTION 3 OF 3") < screens[3].rindex("<verdict")
+
+
+@pytest.mark.parametrize("height", [24, 12])
+def test_a_short_screen_spends_no_rows_above_the_card(monkeypatch, height):
+    # Question 1's screen keeps a margin and the verdict's empty row only when
+    # there is room for them; on a short screen the card's top edge, which
+    # carries the bulbs, comes first.
     monkeypatch.setattr(rt, "ask_round_length", lambda p, width: 2)
     monkeypatch.setattr(rt, "play_splash", lambda *args, **kwargs: False)
     monkeypatch.setattr(rt, "play_finale", lambda *args, **kwargs: False)
     monkeypatch.setattr(rt, "read_key", lambda: "A")
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
-        rt._play_round({"handle": "keeper", "color_depth": "none" if plain else "256"})
-    drawn = buffer.getvalue()
-    if plain:
-        assert "\x1b" not in drawn
-    else:
-        assert drawn.count("\x1b[2J") == 1
-        assert drawn.index("\x1b[2J") < drawn.index("QUESTION 1 OF 2")
-        assert drawn.index("\x1b[2J") > drawn.index("R E T R O")
+        rt._play_round({"handle": "keeper", "color_depth": "256", "terminal_height": height})
+    first = buffer.getvalue().split("\x1b[2J\x1b[H")[1].split("QUESTION 1 OF 2")[0]
+    # The rows before the card's top edge: margin and verdict row, then the
+    # card's own blank row.
+    assert first.count("\r\n") == (3 if height >= 20 else 1)
