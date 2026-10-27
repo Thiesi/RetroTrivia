@@ -788,3 +788,21 @@ def test_each_question_opens_on_a_clean_screen(monkeypatch, plain):
         assert ("<verdict" in before_card) == (number > 1)
     # The last verdict has no next screen: it is drawn under its own card.
     assert screens[3].index("QUESTION 3 OF 3") < screens[3].rindex("<verdict")
+
+
+@pytest.mark.parametrize("height", [24, 12])
+def test_a_short_screen_spends_no_rows_above_the_card(monkeypatch, height):
+    # Question 1's screen keeps a margin and the verdict's empty row only when
+    # there is room for them; on a short screen the card's top edge, which
+    # carries the bulbs, comes first.
+    monkeypatch.setattr(rt, "ask_round_length", lambda p, width: 2)
+    monkeypatch.setattr(rt, "play_splash", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "play_finale", lambda *args, **kwargs: False)
+    monkeypatch.setattr(rt, "read_key", lambda: "A")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rt._play_round({"handle": "keeper", "color_depth": "256", "terminal_height": height})
+    first = buffer.getvalue().split("\x1b[2J\x1b[H")[1].split("QUESTION 1 OF 2")[0]
+    # The rows before the card's top edge: margin and verdict row, then the
+    # card's own blank row.
+    assert first.count("\r\n") == (3 if height >= 20 else 1)

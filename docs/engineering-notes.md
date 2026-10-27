@@ -43,8 +43,11 @@ Each question gets a cleared screen, so the bulbs are the only record of the
 earlier questions. The previous answer's verdict is carried over to the top of
 that screen rather than drawn under its own card: nothing waits after a
 verdict, so a verdict drawn there would be cleared the moment it lit. Question 1
-leaves the verdict's row empty, so the card stays in place all round; screens
-under 20 rows spend neither that row nor the margin. The last verdict has no
+leaves the verdict's row empty, so the card stays in place after any one-row
+verdict (a long answer wraps and moves the card down); screens under 20 rows
+spend neither that row nor the margin. At 80 columns the tallest card with the
+tallest verdict takes 16 rows; at 40×24 the worst pair fills the screen and
+only the margin scrolls off. The last verdict has no
 next screen and stays under its card for the finale's grace period. Plain
 callers can't take a clear, so their round scrolls with every verdict in place.
 
