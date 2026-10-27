@@ -39,6 +39,15 @@ The bulb row in a question's top edge is the round so far -- right, wrong, the
 current question, the rest -- and the results card repeats it as the record of
 the round. It is dropped, never wrapped, when the edge has no room for it.
 
+Each question gets a cleared screen, so the bulbs are the only record of the
+earlier questions. The previous answer's verdict is carried over to the top of
+that screen rather than drawn under its own card: nothing waits after a
+verdict, so a verdict drawn there would be cleared the moment it lit. Question 1
+leaves the verdict's row empty, so the card stays in place all round; screens
+under 20 rows spend neither that row nor the margin. The last verdict has no
+next screen and stays under its card for the finale's grace period. Plain
+callers can't take a clear, so their round scrolls with every verdict in place.
+
 Plain callers see no colour, so anything that colour alone distinguishes needs
 a shape as well: a lit label becomes `[LABEL]`, and a dim marquee bulb a dot.
 
