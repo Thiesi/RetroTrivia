@@ -75,6 +75,12 @@ def _rows(text: str) -> list[str]:
     return [row.rstrip() for row in flat.split("\n")]
 
 
+def test_the_file_carries_its_own_copyright_and_license():
+    """SysOps and NetBBS copy this one file without LICENSE (#28)."""
+    head = _PATH.read_text(encoding="utf-8").splitlines()[:5]
+    assert "Copyright (c) 2026 Thiesi. BSD-2-Clause." in head
+
+
 # -- the bank ------------------------------------------------------------
 
 
