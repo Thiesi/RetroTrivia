@@ -5,3 +5,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Keep only the last run's failed tests' directories (AGENTS.md, "Local disk hygiene").
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1

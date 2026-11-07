@@ -106,6 +106,7 @@ use its stdio recipe above. Real Windows Synchronet validation remains #5.
 python -m pip install pytest pytest-xdist
 python -m pytest -n auto              # the suite
 python tools/check_stdlib_only.py     # the door imports only the standard library
+python tools/clean_scratch.py         # remove local test scratch (see AGENTS.md)
 ```
 
 Retro Trivia was developed inside NetBBS until October 2026. Its history came
